@@ -1,0 +1,9 @@
+apiVersion: backup.cloudinfra.be/v1alpha1
+kind: KopiaBackup
+metadata:
+  labels:
+    app.kubernetes.io/name: kopia-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: kopiabackup-sample
+spec:
+  # TODO(user): Add fields here

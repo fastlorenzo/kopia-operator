@@ -1,0 +1,27 @@
+# permissions for end users to edit kopiabackups.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: kopia-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: kopiabackup-editor-role
+rules:
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiabackups
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiabackups/status
+  verbs:
+  - get
