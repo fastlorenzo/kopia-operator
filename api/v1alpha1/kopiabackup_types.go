@@ -28,14 +28,16 @@ type KopiaBackupSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of KopiaBackup. Edit kopiabackup_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	PVCName  string `json:"pvcName"`
+	Schedule string `json:"schedule"`
 }
 
 // KopiaBackupStatus defines the observed state of KopiaBackup
 type KopiaBackupStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+
+	Active bool `json:"active"`
 }
 
 //+kubebuilder:object:root=true
