@@ -23,6 +23,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -73,12 +74,15 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	var nodeName string
+	var appName string // label app.kubernetes.io/name
 	for _, pod := range podList.Items {
 		// Check if pod is running and has the PVC mounted
 		if pod.Status.Phase == corev1.PodRunning {
 			for _, volume := range pod.Spec.Volumes {
 				if pvc := volume.PersistentVolumeClaim; pvc != nil && pvc.ClaimName == backup.Spec.PVCName {
 					nodeName = pod.Spec.NodeName
+					// Check if the pod has the label app.kubernetes.io/name
+					appName = pod.Labels["app.kubernetes.io/name"]
 					break
 				}
 			}
@@ -96,7 +100,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	log.Info("Found node with running pod", "node", nodeName)
 
 	// Create or update the CronJob for the backup
-	cronJob := constructCronJob(backup, nodeName)
+	cronJob := constructCronJob(backup, nodeName, appName)
 	if cronJob == nil {
 		log.Error(nil, "constructCronJob returned nil")
 		return ctrl.Result{}, fmt.Errorf("constructCronJob returned nil")
@@ -124,18 +128,94 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	} else {
 		log.Info("Skip reconcile: CronJob already exists", "CronJob.Namespace", found.Namespace, "CronJob.Name", found.Name)
-		// Update existing CronJob if necessary
-		// Update logic here if needed
+		// Check if the following has changed: schedule, suspend, container image, PVC name, node name
+		if found.Spec.Schedule != cronJob.Spec.Schedule ||
+			(found.Spec.Suspend != nil && cronJob.Spec.Suspend != nil && *found.Spec.Suspend != *cronJob.Spec.Suspend) ||
+			len(found.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 && len(cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 &&
+				(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image != cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image ||
+					len(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 && len(cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 &&
+						found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1] != cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1]) ||
+			found.Spec.JobTemplate.Spec.Template.Spec.NodeName != cronJob.Spec.JobTemplate.Spec.Template.Spec.NodeName {
+			log.Info("Updating CronJob", "CronJob.Namespace", found.Namespace, "CronJob.Name", found.Name)
+			found.Spec = cronJob.Spec
+			err = r.Update(ctx, found)
+			if err != nil {
+				log.Error(err, "failed to update CronJob")
+				return ctrl.Result{}, err
+			}
+		}
 	}
 
 	// Update status or other finalization
 	return ctrl.Result{}, nil
 }
 
-func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string) *batchv1.CronJob {
+func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string, appName string) *batchv1.CronJob {
 	// Construct the CronJob based on the backup specification and nodeName
 	// Implementation details here
-	return nil
+	// Create a cronjob that runs echo and the pvc name
+	// This is just an example, the actual implementation should be based on the Kopia backup tool
+	// Keep only 1 successful backup history
+	// Keep only 2 failed backup history
+	// Mount the PVC to the pod under /data/<Namespace>/<appName (if exists)>/<PVCName>
+
+	var mountPath string
+	if appName != "" {
+		mountPath = "/data/" + backup.Namespace + "/" + appName + "/" + backup.Spec.PVCName
+	} else {
+		mountPath = "/data/" + backup.Namespace + "/" + backup.Spec.PVCName
+	}
+	cronJob := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      backup.Name + "-cronjob",
+			Namespace: backup.Namespace,
+		},
+		Spec: batchv1.CronJobSpec{
+			Schedule: backup.Spec.Schedule,
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{
+								"backup.cloudinfra.be/pvc-name":  backup.Spec.PVCName,
+								"backup.cloudinfra.be/node-name": nodeName,
+								"app.kubernetes.io/name":         appName,
+							},
+						},
+						Spec: corev1.PodSpec{
+							NodeName: nodeName,
+							Containers: []corev1.Container{
+								{
+									Name:  "echo",
+									Image: "busybox",
+									Args:  []string{"echo", backup.Spec.PVCName, "&&", "ls", "-l", mountPath},
+									VolumeMounts: []corev1.VolumeMount{
+										{
+											Name:      "data",
+											MountPath: mountPath,
+										},
+									},
+								},
+							},
+							Volumes: []corev1.Volume{
+								{
+									Name: "data",
+									VolumeSource: corev1.VolumeSource{
+										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+											ClaimName: backup.Spec.PVCName,
+										},
+									},
+								},
+							},
+							RestartPolicy: corev1.RestartPolicyOnFailure,
+						},
+					},
+					Suspend: &backup.Spec.Suspend,
+				},
+			},
+		},
+	}
+	return cronJob
 }
 
 // SetupWithManager sets up the controller with the Manager.

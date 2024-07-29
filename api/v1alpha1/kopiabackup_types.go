@@ -30,6 +30,9 @@ type KopiaBackupSpec struct {
 
 	PVCName  string `json:"pvcName"`
 	Schedule string `json:"schedule"`
+
+	// Optional: suspend (default=false) will suspend the cronjob
+	Suspend bool `json:"suspend,omitempty"`
 }
 
 // KopiaBackupStatus defines the observed state of KopiaBackup

@@ -43,6 +43,9 @@ spec:
                 type: string
               schedule:
                 type: string
+              suspend:
+                description: 'Optional: suspend (default=false) will suspend the cronjob'
+                type: boolean
             required:
             - pvcName
             - schedule

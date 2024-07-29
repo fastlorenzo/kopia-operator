@@ -4,4 +4,5 @@ metadata:
   name: backup1
 spec:
   pvcName: test-backup-01
-  schedule: "*/5 * * * *"
+  schedule: "* * * * *"
+  suspend: false
