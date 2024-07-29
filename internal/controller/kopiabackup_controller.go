@@ -18,8 +18,9 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
-	batchv1beta1 "k8s.io/api/batch/v1beta1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,6 +42,8 @@ type KopiaBackupReconciler struct {
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiabackups,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiabackups/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiabackups/finalizers,verbs=update
+//+kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -54,7 +57,6 @@ type KopiaBackupReconciler struct {
 func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("kopiabackup", req.NamespacedName)
 
-	// TODO(user): your logic here
 	// Fetch the KopiaBackup instance
 	backup := &backupv1alpha1.KopiaBackup{}
 	err := r.Get(ctx, req.NamespacedName, backup)
@@ -95,13 +97,18 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Create or update the CronJob for the backup
 	cronJob := constructCronJob(backup, nodeName)
+	if cronJob == nil {
+		log.Error(nil, "constructCronJob returned nil")
+		return ctrl.Result{}, fmt.Errorf("constructCronJob returned nil")
+	}
+
 	if err := ctrl.SetControllerReference(backup, cronJob, r.Scheme); err != nil {
 		log.Error(err, "unable to set owner reference on cronJob")
 		return ctrl.Result{}, err
 	}
 
 	// Logic to create or update the CronJob
-	found := &batchv1beta1.CronJob{}
+	found := &batchv1.CronJob{}
 	err = r.Get(ctx, types.NamespacedName{Name: cronJob.Name, Namespace: cronJob.Namespace}, found)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -125,7 +132,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{}, nil
 }
 
-func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string) *batchv1beta1.CronJob {
+func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string) *batchv1.CronJob {
 	// Construct the CronJob based on the backup specification and nodeName
 	// Implementation details here
 	return nil
@@ -135,6 +142,6 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string) *batc
 func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupv1alpha1.KopiaBackup{}).
-		Owns(&batchv1beta1.CronJob{}).
+		Owns(&batchv1.CronJob{}).
 		Complete(r)
 }
