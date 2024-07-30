@@ -14,28 +14,7 @@ require (
 	sigs.k8s.io/controller-runtime v0.17.3
 )
 
-require (
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.11.1 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/internal v1.5.2 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.3.2 // indirect
-	github.com/chmduquesne/rollinghash v4.0.0+incompatible // indirect
-	github.com/edsrzf/mmap-go v1.1.0 // indirect
-	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/klauspost/compress v1.17.8 // indirect
-	github.com/klauspost/cpuid/v2 v2.2.6 // indirect
-	github.com/klauspost/pgzip v1.2.6 // indirect
-	github.com/klauspost/reedsolomon v1.12.1 // indirect
-	github.com/natefinch/atomic v1.0.1 // indirect
-	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
-	github.com/zeebo/blake3 v0.2.3 // indirect
-	go.opentelemetry.io/otel v1.25.0 // indirect
-	go.opentelemetry.io/otel/metric v1.25.0 // indirect
-	go.opentelemetry.io/otel/trace v1.25.0 // indirect
-	golang.org/x/crypto v0.22.0 // indirect
-	golang.org/x/sync v0.7.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240401170217-c3f982113cda // indirect
-	google.golang.org/grpc v1.63.2 // indirect
-)
+require github.com/stretchr/testify v1.9.0 // indirect
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -60,7 +39,6 @@ require (
 	github.com/imdario/mergo v0.3.6 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/kopia/kopia v0.17.0
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect

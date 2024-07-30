@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package backup
 
 import (
 	"context"
@@ -27,10 +27,10 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/v1alpha1"
+	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 )
 
-var _ = Describe("KopiaRepository Controller", func() {
+var _ = Describe("KopiaBackup Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 
@@ -40,13 +40,13 @@ var _ = Describe("KopiaRepository Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		kopiarepository := &backupv1alpha1.KopiaRepository{}
+		kopiabackup := &backupv1alpha1.KopiaBackup{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind KopiaRepository")
-			err := k8sClient.Get(ctx, typeNamespacedName, kopiarepository)
+			By("creating the custom resource for the Kind KopiaBackup")
+			err := k8sClient.Get(ctx, typeNamespacedName, kopiabackup)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &backupv1alpha1.KopiaRepository{
+				resource := &backupv1alpha1.KopiaBackup{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,16 +59,16 @@ var _ = Describe("KopiaRepository Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &backupv1alpha1.KopiaRepository{}
+			resource := &backupv1alpha1.KopiaBackup{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance KopiaRepository")
+			By("Cleanup the specific resource instance KopiaBackup")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &KopiaRepositoryReconciler{
+			controllerReconciler := &KopiaBackupReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}

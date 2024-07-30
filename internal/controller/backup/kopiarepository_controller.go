@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package backup
 
 import (
 	"context"
@@ -24,7 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/v1alpha1"
+	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 	"github.com/go-logr/logr"
 )
 

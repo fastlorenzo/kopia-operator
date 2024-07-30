@@ -35,8 +35,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/v1alpha1"
-	"github.com/fastlorenzo/kopia-operator/internal/controller"
+	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
+	backupcontroller "github.com/fastlorenzo/kopia-operator/internal/controller/backup"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -125,14 +125,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.KopiaBackupReconciler{
+	if err = (&backupcontroller.KopiaBackupReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KopiaBackup")
 		os.Exit(1)
 	}
-	if err = (&controller.KopiaRepositoryReconciler{
+	if err = (&backupcontroller.KopiaRepositoryReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
