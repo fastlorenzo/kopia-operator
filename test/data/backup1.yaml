@@ -1,8 +1,0 @@
-kind: KopiaBackup
-apiVersion: backup.cloudinfra.be/v1alpha1
-metadata:
-  name: backup1
-spec:
-  pvcName: test-backup-01
-  schedule: "* * * * *"
-  suspend: false

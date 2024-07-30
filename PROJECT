@@ -20,4 +20,13 @@ resources:
   kind: KopiaBackup
   path: github.com/fastlorenzo/kopia-operator/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cloudinfra.be
+  group: backup
+  kind: KopiaRepository
+  path: github.com/fastlorenzo/kopia-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

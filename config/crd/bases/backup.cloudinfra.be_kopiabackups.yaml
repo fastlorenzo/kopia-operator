@@ -40,14 +40,20 @@ spec:
             description: KopiaBackupSpec defines the desired state of KopiaBackup
             properties:
               pvcName:
+                description: Name of the PVC to backup
+                type: string
+              repository:
+                description: KopiaRepository to use for the backup
                 type: string
               schedule:
+                description: Schedule for the backup
                 type: string
               suspend:
                 description: 'Optional: suspend (default=false) will suspend the cronjob'
                 type: boolean
             required:
             - pvcName
+            - repository
             - schedule
             type: object
           status:

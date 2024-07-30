@@ -28,8 +28,12 @@ type KopiaBackupSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	PVCName  string `json:"pvcName"`
+	// Name of the PVC to backup
+	PVCName string `json:"pvcName"`
+	// Schedule for the backup
 	Schedule string `json:"schedule"`
+	// KopiaRepository to use for the backup
+	Repository string `json:"repository"`
 
 	// Optional: suspend (default=false) will suspend the cronjob
 	Suspend bool `json:"suspend,omitempty"`

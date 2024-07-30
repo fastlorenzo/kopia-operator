@@ -20,5 +20,7 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the Project itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- kopiarepository_editor_role.yaml
+- kopiarepository_viewer_role.yaml
 - kopiabackup_editor_role.yaml
 - kopiabackup_viewer_role.yaml

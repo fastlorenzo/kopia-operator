@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -66,6 +67,16 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Check if the repository exists (KopiaRepository) - name is in backup.Spec.Repository
+	repository := &backupv1alpha1.KopiaRepository{}
+	err = r.Get(ctx, types.NamespacedName{Name: backup.Spec.Repository, Namespace: backup.Namespace}, repository)
+	if err != nil {
+		log.Error(err, "unable to fetch KopiaRepository")
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	log.Info("Found KopiaRepository", "KopiaRepository", repository.Name)
+
 	// List all Pods in the same namespace
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList, client.InNamespace(backup.Namespace)); err != nil {
@@ -100,7 +111,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	log.Info("Found node with running pod", "node", nodeName)
 
 	// Create or update the CronJob for the backup
-	cronJob := constructCronJob(backup, nodeName, appName)
+	cronJob := constructCronJob(backup, nodeName, appName, repository)
 	if cronJob == nil {
 		log.Error(nil, "constructCronJob returned nil")
 		return ctrl.Result{}, fmt.Errorf("constructCronJob returned nil")
@@ -150,7 +161,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{}, nil
 }
 
-func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string, appName string) *batchv1.CronJob {
+func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string, appName string, repo *backupv1alpha1.KopiaRepository) *batchv1.CronJob {
 	// Construct the CronJob based on the backup specification and nodeName
 	// Implementation details here
 	// Create a cronjob that runs echo and the pvc name
@@ -165,6 +176,39 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string, appNa
 	} else {
 		mountPath = "/data/" + backup.Namespace + "/" + backup.Spec.PVCName
 	}
+	var kopiaCacheDirectory = filepath.Join(repo.Spec.FileSystemOptions.Path, ".kopia", "cache")
+	var kopiaLogDir = filepath.Join(repo.Spec.FileSystemOptions.Path, ".kopia", "logs")
+
+	var envVars = []corev1.EnvVar{
+		{
+			Name:  "KOPIA_CACHE_DIRECTORY",
+			Value: kopiaCacheDirectory,
+		},
+		{
+			Name:  "KOPIA_LOG_DIR",
+			Value: kopiaLogDir,
+		},
+	}
+
+	var envFrom = []corev1.EnvFromSource{}
+
+	if repo.Spec.RepositoryPasswordExistingSecret != "" {
+		envFrom = append(envFrom, corev1.EnvFromSource{
+			SecretRef: &corev1.SecretEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: repo.Spec.RepositoryPasswordExistingSecret,
+				},
+			},
+		})
+	} else {
+		if repo.Spec.RepositoryPassword != "" {
+			envVars = append(envVars, corev1.EnvVar{
+				Name:  "KOPIA_PASSWORD",
+				Value: repo.Spec.RepositoryPassword,
+			})
+		}
+	}
+
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      backup.Name + "-cronjob",
@@ -186,13 +230,27 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string, appNa
 							NodeName: nodeName,
 							Containers: []corev1.Container{
 								{
-									Name:  "echo",
-									Image: "busybox",
-									Args:  []string{"echo", backup.Spec.PVCName, "&&", "ls", "-l", mountPath},
+									Name:  "snapshot",
+									Image: "ghcr.io/fastlorenzo/kopia:0.16.1@sha256:e473aeb43e13e298853898c3613da2a4834f4bff2ccf747fbb2a90072d9e92c8",
+									Args: []string{"/bin/bash", "-c", "" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/07] Create repo ...\"              && [[ ! -f " + repo.Spec.FileSystemOptions.Path + "/kopia.repository.f ]] && kopia repository create filesystem --path=" + repo.Spec.FileSystemOptions.Path + "\n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/07] Connect to repo ...\"          && kopia repo connect filesystem --path=" + repo.Spec.FileSystemOptions.Path + " --override-hostname=" + repo.Spec.Hostname + " --override-username=" + repo.Spec.Username + "\n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[03/07] Create snapshot ...\"          && kopia snap create " + mountPath + "\n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[04/07] List snapshots ...\"           && kopia snap list " + mountPath + "\n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[05/07] Show stats ...\"               && kopia content stats \n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[06/07] Show maintenance info ...\"      && kopia maintenance info \n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[07/07] Disconnect repo ...\"           && kopia repo disconnect \n",
+									},
+									Env:     envVars,
+									EnvFrom: envFrom,
 									VolumeMounts: []corev1.VolumeMount{
 										{
 											Name:      "data",
 											MountPath: mountPath,
+										},
+										{
+											Name:      "repo",
+											MountPath: repo.Spec.FileSystemOptions.Path,
 										},
 									},
 								},
@@ -206,8 +264,24 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string, appNa
 										},
 									},
 								},
+								{
+									Name: "repo",
+									VolumeSource: corev1.VolumeSource{
+										NFS: &corev1.NFSVolumeSource{
+											Server: repo.Spec.FileSystemOptions.NFSServer,
+											Path:   repo.Spec.FileSystemOptions.NFSPath,
+										},
+									},
+								},
 							},
 							RestartPolicy: corev1.RestartPolicyOnFailure,
+							Tolerations: []corev1.Toleration{
+								{
+									Effect:   corev1.TaintEffectNoSchedule,
+									Key:      "dedicated",
+									Operator: corev1.TolerationOpExists,
+								},
+							},
 						},
 					},
 					Suspend: &backup.Spec.Suspend,

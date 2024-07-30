@@ -39,6 +39,32 @@ rules:
   - patch
   - update
 - apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiarepositories
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiarepositories/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiarepositories/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - batch
   resources:
   - cronjobs

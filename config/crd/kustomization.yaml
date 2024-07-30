@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/backup.cloudinfra.be_kopiabackups.yaml
+- bases/backup.cloudinfra.be_kopiarepositories.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:
@@ -13,6 +14,7 @@ patches:
 # [CERTMANAGER] To enable cert-manager, uncomment all the sections with [CERTMANAGER] prefix.
 # patches here are for enabling the CA injection for each CRD
 #- path: patches/cainjection_in_kopiabackups.yaml
+#- path: patches/cainjection_in_kopiarepositories.yaml
 #+kubebuilder:scaffold:crdkustomizecainjectionpatch
 
 # [WEBHOOK] To enable webhook, uncomment the following section
