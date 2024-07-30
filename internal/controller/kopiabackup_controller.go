@@ -20,18 +20,30 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
+)
+
+const (
+	pvcNameField = ".spec.pvcName"
 )
 
 // KopiaBackupReconciler reconciles a KopiaBackup object
@@ -57,21 +69,87 @@ type KopiaBackupReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.3/pkg/reconcile
 func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.Log.WithValues("kopiabackup", req.NamespacedName)
+	log := ctrllog.FromContext(ctx)
 
-	// Fetch the KopiaBackup instance
-	backup := &backupv1alpha1.KopiaBackup{}
-	err := r.Get(ctx, req.NamespacedName, backup)
-	if err != nil {
+	// Get the KopiaBackup instance
+	var kBackup backupv1alpha1.KopiaBackup
+	if err := r.Get(ctx, req.NamespacedName, &kBackup); err != nil {
 		log.Error(err, "unable to fetch KopiaBackup")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Get the referenced PVC
+	// var pvcVersion string
+	var pvcRetrievalError error
+	if kBackup.Spec.PVCName != "" {
+		pvcName := kBackup.Spec.PVCName
+		foundPVC := &corev1.PersistentVolumeClaim{}
+		pvcRetrievalError = r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: kBackup.Namespace}, foundPVC)
+		if pvcRetrievalError != nil {
+			if client.IgnoreNotFound(pvcRetrievalError) != nil {
+				// Real error, return
+				log.Error(pvcRetrievalError, "unable to fetch PVC")
+				return ctrl.Result{}, pvcRetrievalError
+			}
+			// Not found, continue
+			log.Info("PVC not found", "PVC", pvcName)
+		} else {
+			log.Info("Found PVC", "PVC", foundPVC.Name)
+		}
+		// pvcVersion = foundPVC.ResourceVersion
+	} else {
+		// Throw an error if no PVC is specified
+		log.Info("No PVC specified in KopiaBackup")
+		return ctrl.Result{}, fmt.Errorf("no PVC specified in KopiaBackup")
+	}
+
+	// Generate the name of the cronjob based on the following: name: "{{ regex_replace_all('^([a-z0-9-]{0,42}).*([a-z0-9])$', '{{claimName}}', 'snapshot-$${1}$${2}') }}"
+	// The cronjob name should be snapshot-<first 42 characters of the PVC name>-<last character of the PVC name>
+	var cronJobName string
+	if len(kBackup.Spec.PVCName) > 42 {
+		cronJobName = "snapshot-" + kBackup.Spec.PVCName[:42] + "-" + string(kBackup.Spec.PVCName[len(kBackup.Spec.PVCName)-1])
+	} else {
+		cronJobName = "snapshot-" + kBackup.Spec.PVCName
+	}
+
+	// Check if the CronJob exists
+	cronJob := &batchv1.CronJob{}
+	var cronJobRetrievalError error
+	cronJobRetrievalError = r.Get(ctx, types.NamespacedName{Name: cronJobName, Namespace: kBackup.Namespace}, cronJob)
+	if cronJobRetrievalError != nil {
+		if client.IgnoreNotFound(cronJobRetrievalError) != nil {
+			// Real error, return
+			log.Error(cronJobRetrievalError, "unable to fetch CronJob")
+			return ctrl.Result{}, cronJobRetrievalError
+		}
+		// Not found, continue
+		log.Info("CronJob not found", "CronJob", kBackup.Spec.Repository)
+	} else {
+		log.Info("Found CronJob", "CronJob", cronJob.Name)
+		// Delete the CronJob if the PVC is not found
+		if pvcRetrievalError != nil && client.IgnoreNotFound(pvcRetrievalError) == nil {
+			log.Info("PVC not found, deleting CronJob", "CronJob", cronJob.Name)
+			err := r.Delete(ctx, cronJob)
+			if err != nil {
+				log.Error(err, "unable to delete CronJob")
+				return ctrl.Result{}, err
+			}
+			// Return here to avoid further processing
+			return ctrl.Result{}, nil
+		}
+	}
+
 	// Check if the repository exists (KopiaRepository) - name is in backup.Spec.Repository
 	repository := &backupv1alpha1.KopiaRepository{}
-	err = r.Get(ctx, types.NamespacedName{Name: backup.Spec.Repository, Namespace: backup.Namespace}, repository)
+	err := r.Get(ctx, types.NamespacedName{Name: kBackup.Spec.Repository, Namespace: kBackup.Namespace}, repository)
 	if err != nil {
-		log.Error(err, "unable to fetch KopiaRepository")
+		if client.IgnoreNotFound(err) != nil {
+			// Real error, return
+			log.Error(err, "unable to fetch KopiaRepository")
+			return ctrl.Result{}, err
+		}
+		// Not found, return
+		log.Error(err, "Referenced KopiaRepository not found", "KopiaRepository", kBackup.Spec.Repository)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -79,21 +157,28 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// List all Pods in the same namespace
 	var podList corev1.PodList
-	if err := r.List(ctx, &podList, client.InNamespace(backup.Namespace)); err != nil {
+	if err := r.List(ctx, &podList, client.InNamespace(kBackup.Namespace)); err != nil {
 		log.Error(err, "unable to list pods in the namespace")
 		return ctrl.Result{}, err
 	}
 
 	var nodeName string
 	var appName string // label app.kubernetes.io/name
+	var podName string
 	for _, pod := range podList.Items {
 		// Check if pod is running and has the PVC mounted
 		if pod.Status.Phase == corev1.PodRunning {
 			for _, volume := range pod.Spec.Volumes {
-				if pvc := volume.PersistentVolumeClaim; pvc != nil && pvc.ClaimName == backup.Spec.PVCName {
+				if pvc := volume.PersistentVolumeClaim; pvc != nil && pvc.ClaimName == kBackup.Spec.PVCName {
+					// Skip backup pods where name starts with snapshot-
+					if strings.HasPrefix(pod.Name, "snapshot-") {
+						continue
+					}
+
 					nodeName = pod.Spec.NodeName
 					// Check if the pod has the label app.kubernetes.io/name
 					appName = pod.Labels["app.kubernetes.io/name"]
+					podName = pod.Name
 					break
 				}
 			}
@@ -102,7 +187,17 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			break
 		}
 	}
-
+	if podName != "" {
+		// Add the pod name to the labels of the KopiaBackup object
+		if kBackup.Labels == nil {
+			kBackup.Labels = make(map[string]string)
+		}
+		kBackup.Labels["backup.cloudinfra.be/pod-name"] = podName
+		if err := r.Update(ctx, &kBackup); err != nil {
+			log.Error(err, "unable to update KopiaBackup pod name label")
+			return ctrl.Result{}, err
+		}
+	}
 	if nodeName == "" {
 		log.Info("No running pod found with the PVC mounted, requeuing")
 		return ctrl.Result{Requeue: true}, nil
@@ -111,24 +206,24 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	log.Info("Found node with running pod", "node", nodeName)
 
 	// Create or update the CronJob for the backup
-	cronJob := constructCronJob(backup, nodeName, appName, repository)
-	if cronJob == nil {
+	newCronJob := constructCronJob(&kBackup, cronJobName, nodeName, appName, repository)
+	if newCronJob == nil {
 		log.Error(nil, "constructCronJob returned nil")
 		return ctrl.Result{}, fmt.Errorf("constructCronJob returned nil")
 	}
 
-	if err := ctrl.SetControllerReference(backup, cronJob, r.Scheme); err != nil {
+	if err := ctrl.SetControllerReference(&kBackup, newCronJob, r.Scheme); err != nil {
 		log.Error(err, "unable to set owner reference on cronJob")
 		return ctrl.Result{}, err
 	}
 
 	// Logic to create or update the CronJob
 	found := &batchv1.CronJob{}
-	err = r.Get(ctx, types.NamespacedName{Name: cronJob.Name, Namespace: cronJob.Namespace}, found)
+	err = r.Get(ctx, types.NamespacedName{Name: newCronJob.Name, Namespace: newCronJob.Namespace}, found)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			log.Info("Creating a new CronJob", "CronJob.Namespace", cronJob.Namespace, "CronJob.Name", cronJob.Name)
-			err = r.Create(ctx, cronJob)
+			log.Info("Creating a new CronJob", "CronJob.Namespace", newCronJob.Namespace, "CronJob.Name", newCronJob.Name)
+			err = r.Create(ctx, newCronJob)
 			if err != nil {
 				log.Error(err, "failed to create CronJob")
 				return ctrl.Result{}, err
@@ -140,15 +235,15 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	} else {
 		log.Info("Skip reconcile: CronJob already exists", "CronJob.Namespace", found.Namespace, "CronJob.Name", found.Name)
 		// Check if the following has changed: schedule, suspend, container image, PVC name, node name
-		if found.Spec.Schedule != cronJob.Spec.Schedule ||
-			(found.Spec.Suspend != nil && cronJob.Spec.Suspend != nil && *found.Spec.Suspend != *cronJob.Spec.Suspend) ||
-			len(found.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 && len(cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 &&
-				(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image != cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image ||
-					len(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 && len(cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 &&
-						found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1] != cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1]) ||
-			found.Spec.JobTemplate.Spec.Template.Spec.NodeName != cronJob.Spec.JobTemplate.Spec.Template.Spec.NodeName {
+		if found.Spec.Schedule != newCronJob.Spec.Schedule ||
+			(found.Spec.Suspend != nil && newCronJob.Spec.Suspend != nil && *found.Spec.Suspend != *newCronJob.Spec.Suspend) ||
+			len(found.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 && len(newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 &&
+				(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image != newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image ||
+					len(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 && len(newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 &&
+						found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1] != newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1]) ||
+			found.Spec.JobTemplate.Spec.Template.Spec.NodeName != newCronJob.Spec.JobTemplate.Spec.Template.Spec.NodeName {
 			log.Info("Updating CronJob", "CronJob.Namespace", found.Namespace, "CronJob.Name", found.Name)
-			found.Spec = cronJob.Spec
+			found.Spec = newCronJob.Spec
 			err = r.Update(ctx, found)
 			if err != nil {
 				log.Error(err, "failed to update CronJob")
@@ -161,7 +256,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{}, nil
 }
 
-func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string, appName string, repo *backupv1alpha1.KopiaRepository) *batchv1.CronJob {
+func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, nodeName string, appName string, repo *backupv1alpha1.KopiaRepository) *batchv1.CronJob {
 	// Construct the CronJob based on the backup specification and nodeName
 	// Implementation details here
 	// Create a cronjob that runs echo and the pvc name
@@ -211,11 +306,12 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string, appNa
 
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      backup.Name + "-cronjob",
+			Name:      cronJobName,
 			Namespace: backup.Namespace,
 		},
 		Spec: batchv1.CronJobSpec{
-			Schedule: backup.Spec.Schedule,
+			ConcurrencyPolicy: batchv1.ForbidConcurrent,
+			Schedule:          backup.Spec.Schedule,
 			JobTemplate: batchv1.JobTemplateSpec{
 				Spec: batchv1.JobSpec{
 					Template: corev1.PodTemplateSpec{
@@ -292,10 +388,82 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, nodeName string, appNa
 	return cronJob
 }
 
-// SetupWithManager sets up the controller with the Manager.
+func (r *KopiaBackupReconciler) findObjectsForPVC(ctx context.Context, pvc client.Object) []reconcile.Request {
+	// Find all KopiaBackup objects that reference this PVC
+	attachedKopiaBackups := &backupv1alpha1.KopiaBackupList{}
+	listOps := &client.ListOptions{
+		FieldSelector: fields.OneTermEqualSelector(pvcNameField, pvc.GetName()),
+		Namespace:     pvc.GetNamespace(),
+	}
+	err := r.List(ctx, attachedKopiaBackups, listOps)
+	if err != nil {
+		r.Log.Error(err, "unable to list KopiaBackups")
+		return []reconcile.Request{}
+	}
+
+	requests := make([]reconcile.Request, len(attachedKopiaBackups.Items))
+	for i, item := range attachedKopiaBackups.Items {
+		requests[i] = reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      item.GetName(),
+				Namespace: item.GetNamespace(),
+			},
+		}
+	}
+
+	return requests
+}
+
+func (r *KopiaBackupReconciler) findObjectsForPod(ctx context.Context, pod client.Object) []reconcile.Request {
+	// Find all KopiaBackup objects that are linked to this pod
+	attachedKopiaBackups := &backupv1alpha1.KopiaBackupList{}
+	listOps := &client.ListOptions{
+		LabelSelector: labels.SelectorFromSet(labels.Set{"backup.cloudinfra.be/pod-name": pod.GetName()}),
+		Namespace:     pod.GetNamespace(),
+	}
+	err := r.List(ctx, attachedKopiaBackups, listOps)
+	if err != nil {
+		r.Log.Error(err, "unable to list KopiaBackups")
+		return []reconcile.Request{}
+	}
+
+	requests := make([]reconcile.Request, len(attachedKopiaBackups.Items))
+	for i, item := range attachedKopiaBackups.Items {
+		requests[i] = reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      item.GetName(),
+				Namespace: item.GetNamespace(),
+			},
+		}
+	}
+
+	return requests
+}
+
 func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &backupv1alpha1.KopiaBackup{}, pvcNameField, func(rawObj client.Object) []string {
+		// Extract the PVC Name from the KopiaBackup object, if it is set
+		kBackup := rawObj.(*backupv1alpha1.KopiaBackup)
+		if kBackup.Spec.PVCName == "" {
+			return nil
+		}
+
+		return []string{kBackup.Spec.PVCName}
+	}); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupv1alpha1.KopiaBackup{}).
 		Owns(&batchv1.CronJob{}).
+		Watches(
+			&corev1.PersistentVolumeClaim{},
+			handler.EnqueueRequestsFromMapFunc(r.findObjectsForPVC),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.findObjectsForPod),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
 		Complete(r)
 }

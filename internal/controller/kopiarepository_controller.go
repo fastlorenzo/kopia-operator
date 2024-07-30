@@ -65,7 +65,10 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	// Check each repository for correctnes in configuration
 	for _, repo := range kopiaRepos.Items {
+
+		// Check if Spec.StorageType is supported
 		if !slices.Contains(r.SupporedStorageTypes, repo.Spec.StorageType) {
 			log.Info("unsupported storage type", "storageType", repo.Spec.StorageType, repo.Name)
 			return ctrl.Result{}, nil
