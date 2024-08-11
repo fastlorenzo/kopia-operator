@@ -127,8 +127,8 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			} else {
 				// Not found, return
 				log.Error(err, "error getting referenced KopiaRepository", "KopiaRepository", repositoryName)
-				return ctrl.Result{}, err
 			}
+			return ctrl.Result{}, err
 		}
 
 		log.Info("Found KopiaRepository", "KopiaRepository", repository.Name)
@@ -146,7 +146,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			},
 		}
 
-		if err := ctrl.SetControllerReference(repository, newKopiaBackup, r.Scheme); err != nil {
+		if err := ctrl.SetControllerReference(pvc, newKopiaBackup, r.Scheme); err != nil {
 			log.Error(err, "unable to set owner reference on KopiaBackup")
 			return ctrl.Result{}, err
 		}
@@ -196,7 +196,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Check if the CronJob exists
 	cronJob := &batchv1.CronJob{}
-	var cronJobRetrievalError error
+	var cronJobRetrievalError error = nil
 	cronJobRetrievalError = r.Get(ctx, types.NamespacedName{Name: cronJobName, Namespace: kBackup.Namespace}, cronJob)
 	if cronJobRetrievalError != nil {
 		if client.IgnoreNotFound(cronJobRetrievalError) != nil {
