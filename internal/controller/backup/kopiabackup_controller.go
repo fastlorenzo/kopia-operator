@@ -90,6 +90,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if !kBackupFound {
+		log.Info("Checking if this is a PVC request")
 		// Check if the request is for a PVC
 		pvc := &corev1.PersistentVolumeClaim{}
 		if err := r.Get(ctx, req.NamespacedName, pvc); err != nil {
@@ -117,21 +118,14 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 		log.Info("Checking if KopiaRepository exists", "KopiaRepository", repositoryName)
 
-		// Check if the repository exists (KopiaRepository) - name is in backup.Spec.Repository
-		repository := &backupv1alpha1.KopiaRepository{}
-		err := r.Get(ctx, types.NamespacedName{Name: repositoryName}, repository)
-		if err != nil {
-			if errors.IsNotFound(err) {
-				// Real error, return
-				log.Error(err, "unable to fetch KopiaRepository")
-			} else {
-				// Not found, return
-				log.Error(err, "error getting referenced KopiaRepository", "KopiaRepository", repositoryName)
-			}
-			return ctrl.Result{}, err
+		// Check if the repository exists
+		repository, repositoryErr := getKopiaRepositoryByName(ctx, r.Client, repositoryName, log)
+		if repositoryErr != nil {
+			log.Error(repositoryErr, "error getting KopiaRepository", "repositoryName", repositoryName)
+			return ctrl.Result{}, repositoryErr
 		}
 
-		log.Info("Found KopiaRepository", "KopiaRepository", repository.Name)
+		log.Info("Found KopiaRepository", "repositoryName", repository.Name)
 
 		// Create a new KopiaBackup object
 		newKopiaBackup := &backupv1alpha1.KopiaBackup{
@@ -156,8 +150,29 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 
+		// Update the status
+		newKopiaBackup.Status.Active = true
+		newKopiaBackup.Status.FromAnnotation = true
+
+		if err := r.Status().Update(ctx, newKopiaBackup); err != nil {
+			log.Error(err, "unable to update KopiaBackup status")
+			return ctrl.Result{}, err
+		}
+
 		log.Info("Created KopiaBackup", "KopiaBackup", newKopiaBackup.Name)
 		return ctrl.Result{}, nil
+	}
+
+	// Update the Status
+	if kBackup.Spec.Suspend {
+		kBackup.Status.Active = false
+	} else {
+		kBackup.Status.Active = true
+	}
+
+	if err := r.Status().Update(ctx, &kBackup); err != nil {
+		log.Error(err, "unable to update KopiaBackup status")
+		return ctrl.Result{}, err
 	}
 
 	// Get the referenced PVC
@@ -177,6 +192,22 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			log.Info("PVC not found", "PVC", pvcName)
 		} else {
 			log.Info("Found PVC", "PVC", foundPVC.Name)
+
+			// Check if the label backup.cloudinfra.be/repository is set on the PVC if kopiabackup.Status.FromAnnotation is true
+			if kBackup.Status.FromAnnotation {
+				log.Info("The KopiaBackup object was created from an annotation, checking if the PVC still has the required labels")
+				_, ok := foundPVC.Labels["backup.cloudinfra.be/repository"]
+				if !ok {
+					log.Info("PVC does not have the required labels, deleting KopiaBackup")
+					// we should delete the KopiaBackup object here
+					err := r.Delete(ctx, &kBackup)
+					if err != nil {
+						log.Error(err, "unable to delete KopiaBackup")
+						return ctrl.Result{}, err
+					}
+					return ctrl.Result{}, nil
+				}
+			}
 		}
 		// pvcVersion = foundPVC.ResourceVersion
 	} else {
@@ -221,21 +252,14 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	// Check if the repository exists (KopiaRepository) - name is in backup.Spec.Repository
-	repository := &backupv1alpha1.KopiaRepository{}
-	err := r.Get(ctx, types.NamespacedName{Name: kBackup.Spec.Repository}, repository)
-	if err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			// Real error, return
-			log.Error(err, "unable to fetch KopiaRepository")
-			return ctrl.Result{}, err
-		}
-		// Not found, return
-		log.Error(err, "Referenced KopiaRepository not found", "KopiaRepository", kBackup.Spec.Repository)
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	// Check if the repository exists
+	repository, repositoryErr := getKopiaRepositoryByName(ctx, r.Client, kBackup.Spec.Repository, log)
+	if repositoryErr != nil {
+		log.Error(repositoryErr, "error getting KopiaRepository", "repositoryName", kBackup.Spec.Repository)
+		return ctrl.Result{}, repositoryErr
 	}
 
-	log.Info("Found KopiaRepository", "KopiaRepository", repository.Name)
+	log.Info("Found KopiaRepository", "repositoryName", repository.Name)
 
 	// List all Pods in the same namespace
 	var podList corev1.PodList
@@ -301,7 +325,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Logic to create or update the CronJob
 	found := &batchv1.CronJob{}
-	err = r.Get(ctx, types.NamespacedName{Name: newCronJob.Name, Namespace: newCronJob.Namespace}, found)
+	err := r.Get(ctx, types.NamespacedName{Name: newCronJob.Name, Namespace: newCronJob.Namespace}, found)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			log.Info("Creating a new CronJob", "CronJob.Namespace", newCronJob.Namespace, "CronJob.Name", newCronJob.Name)
@@ -323,7 +347,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image != newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image ||
 					len(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 && len(newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 &&
 						found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1] != newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1]) ||
-			found.Spec.JobTemplate.Spec.Template.Spec.NodeName != newCronJob.Spec.JobTemplate.Spec.Template.Spec.NodeName {
+			found.Spec.JobTemplate.Spec.Template.Spec.NodeName != newCronJob.Spec.JobTemplate.Spec.Template.Spec.NodeName || len(found.Spec.JobTemplate.Spec.Template.Spec.InitContainers) != len(newCronJob.Spec.JobTemplate.Spec.Template.Spec.InitContainers) {
 			log.Info("Updating CronJob", "CronJob.Namespace", found.Namespace, "CronJob.Name", found.Name)
 			found.Spec = newCronJob.Spec
 			err = r.Update(ctx, found)
@@ -386,6 +410,21 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, no
 		}
 	}
 
+	// Add an init container with the following spec:
+	// initContainers:
+	//  - name: wait
+	//	image: ghcr.io/fastlorenzo/kopia:0.16.1@sha256:e473aeb43e13e298853898c3613da2a4834f4bff2ccf747fbb2a90072d9e92c8
+	//	command: ["/scripts/sleep.sh"]
+	//	args: ["1", "900"]
+
+	var initContainers []corev1.Container
+	initContainers = append(initContainers, corev1.Container{
+		Name:    "wait",
+		Image:   "ghcr.io/fastlorenzo/kopia:0.16.1@sha256:e473aeb43e13e298853898c3613da2a4834f4bff2ccf747fbb2a90072d9e92c8",
+		Command: []string{"/scripts/sleep.sh"},
+		Args:    []string{"1", "900"},
+	})
+
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cronJobName,
@@ -394,6 +433,7 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, no
 		Spec: batchv1.CronJobSpec{
 			ConcurrencyPolicy: batchv1.ForbidConcurrent,
 			Schedule:          backup.Spec.Schedule,
+			Suspend:           &backup.Spec.Suspend,
 			JobTemplate: batchv1.JobTemplateSpec{
 				Spec: batchv1.JobSpec{
 					Template: corev1.PodTemplateSpec{
@@ -405,7 +445,8 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, no
 							},
 						},
 						Spec: corev1.PodSpec{
-							NodeName: nodeName,
+							NodeName:       nodeName,
+							InitContainers: initContainers,
 							Containers: []corev1.Container{
 								{
 									Name:  "snapshot",
@@ -468,6 +509,56 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, no
 		},
 	}
 	return cronJob
+}
+
+func getKopiaRepositoryByName(ctx context.Context, c client.Client, repositoryName string, log logr.Logger) (*backupv1alpha1.KopiaRepository, error) {
+	// Check if the repository exists in the current namespace
+	repository := &backupv1alpha1.KopiaRepository{}
+	err := c.Get(ctx, types.NamespacedName{Name: repositoryName}, repository)
+
+	if err != nil {
+		// Real error, return it
+		if !errors.IsNotFound(err) {
+			log.Error(err, "error getting KopiaRepository", "repositoryName", repositoryName)
+			return nil, err
+		}
+
+		// If not, try to list all repositories in all namespaces and find the repository
+		log.Info("KopiaRepository not found in the current namespace, checking all namespaces", "currentNamespace", ctx.Value("namespace"))
+		var allRepositories backupv1alpha1.KopiaRepositoryList
+		if err := c.List(ctx, &allRepositories); err != nil {
+			log.Error(err, "Error listing KopiaRepositories")
+			return nil, nil
+		}
+
+		log.Info("found KopiaRepositories", "KopiaRepositoriesCount", len(allRepositories.Items))
+		var matchingRepositories []backupv1alpha1.KopiaRepository
+		for _, repo := range allRepositories.Items {
+			if repo.Name == repositoryName {
+				matchingRepositories = append(matchingRepositories, repo)
+			}
+		}
+
+		log.Info("found matching KopiaRepositories", "MatchingKopiaRepositories", len(matchingRepositories))
+
+		// repositories, err := getKopiaRepositoriesByName(ctx, r.Client, repositoryName)
+		// if err != nil {
+		// 	log.Error(err, "error listing KopiaRepositories")
+		// 	return ctrl.Result{}, err
+		// }
+		if len(matchingRepositories) == 0 {
+			log.Info("KopiaRepository not found in all namespaces", "repositoryName", repositoryName)
+			return nil, nil
+		}
+		if len(matchingRepositories) > 1 {
+			log.Error(nil, "multiple KopiaRepositories with the same name found in multiple namespaces", "repositoryName", repositoryName)
+			return nil, fmt.Errorf("multiple KopiaRepositories with the same name found in multiple namespaces")
+		}
+		repository = &matchingRepositories[0]
+	}
+
+	log.Info("Found KopiaRepository", "repositoryName", repository.Name, "repositoryNamespace", repository.Namespace)
+	return repository, nil
 }
 
 func (r *KopiaBackupReconciler) findObjectsForPVC(ctx context.Context, pvc client.Object) []reconcile.Request {

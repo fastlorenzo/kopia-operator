@@ -61,8 +61,11 @@ spec:
             properties:
               active:
                 type: boolean
+              fromAnnotation:
+                type: boolean
             required:
             - active
+            - fromAnnotation
             type: object
         type: object
     served: true

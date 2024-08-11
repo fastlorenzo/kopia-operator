@@ -44,7 +44,8 @@ type KopiaBackupStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	Active bool `json:"active"`
+	Active         bool `json:"active"`
+	FromAnnotation bool `json:"fromAnnotation"`
 }
 
 //+kubebuilder:object:root=true
