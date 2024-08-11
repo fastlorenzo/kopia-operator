@@ -121,7 +121,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		repository := &backupv1alpha1.KopiaRepository{}
 		err := r.Get(ctx, types.NamespacedName{Name: repositoryName}, repository)
 		if err != nil {
-			if client.IgnoreNotFound(err) != nil {
+			if errors.IsNotFound(err) {
 				// Real error, return
 				log.Error(err, "unable to fetch KopiaRepository")
 			} else {
