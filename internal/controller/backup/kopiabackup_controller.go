@@ -58,6 +58,7 @@ type KopiaBackupReconciler struct {
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiabackups/finalizers,verbs=update
 //+kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -71,11 +72,92 @@ type KopiaBackupReconciler struct {
 func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
+	log.Info("Received reconcile request", "Name", req.Name, "Namespace", req.Namespace, "Request", req, "Context", ctx)
+
 	// Get the KopiaBackup instance
 	var kBackup backupv1alpha1.KopiaBackup
+	var kBackupFound bool
 	if err := r.Get(ctx, req.NamespacedName, &kBackup); err != nil {
-		log.Error(err, "unable to fetch KopiaBackup")
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if errors.IsNotFound(err) {
+			log.Info("KopiaBackup resource not found, will check if this is a PVC request")
+			kBackupFound = false
+		} else {
+			log.Error(err, "unable to fetch KopiaBackup")
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+	} else {
+		kBackupFound = true
+	}
+
+	if !kBackupFound {
+		// Check if the request is for a PVC
+		pvc := &corev1.PersistentVolumeClaim{}
+		if err := r.Get(ctx, req.NamespacedName, pvc); err != nil {
+			if errors.IsNotFound(err) {
+				log.Info("PVC resource not found")
+				return ctrl.Result{}, nil
+			} else {
+				log.Error(err, "unable to fetch PVC")
+				return ctrl.Result{}, client.IgnoreNotFound(err)
+			}
+		}
+
+		// Create a new KopiaBackup object for the PVC, if it has backup.cloudinfra.be/repository label set
+		// and if backup.cloudinfra.be/repository is a valid KopiaRepository object
+		if pvc.Labels == nil {
+			log.Info("PVC does not have the required labels")
+			return ctrl.Result{}, nil
+		}
+
+		repositoryName, ok := pvc.Labels["backup.cloudinfra.be/repository"]
+		if !ok {
+			log.Info("PVC does not have the required labels")
+			return ctrl.Result{}, nil
+		}
+
+		log.Info("Checking if KopiaRepository exists", "KopiaRepository", repositoryName)
+
+		// Check if the repository exists (KopiaRepository) - name is in backup.Spec.Repository
+		repository := &backupv1alpha1.KopiaRepository{}
+		err := r.Get(ctx, types.NamespacedName{Name: repositoryName}, repository)
+		if err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				// Real error, return
+				log.Error(err, "unable to fetch KopiaRepository")
+			} else {
+				// Not found, return
+				log.Error(err, "error getting referenced KopiaRepository", "KopiaRepository", repositoryName)
+				return ctrl.Result{}, err
+			}
+		}
+
+		log.Info("Found KopiaRepository", "KopiaRepository", repository.Name)
+
+		// Create a new KopiaBackup object
+		newKopiaBackup := &backupv1alpha1.KopiaBackup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pvc.Name,
+				Namespace: pvc.Namespace,
+			},
+			Spec: backupv1alpha1.KopiaBackupSpec{
+				PVCName:    pvc.Name,
+				Repository: repository.Name,
+				Schedule:   repository.Spec.DefaultSchedule,
+			},
+		}
+
+		if err := ctrl.SetControllerReference(repository, newKopiaBackup, r.Scheme); err != nil {
+			log.Error(err, "unable to set owner reference on KopiaBackup")
+			return ctrl.Result{}, err
+		}
+
+		if err := r.Create(ctx, newKopiaBackup); err != nil {
+			log.Error(err, "unable to create KopiaBackup")
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Created KopiaBackup", "KopiaBackup", newKopiaBackup.Name)
+		return ctrl.Result{}, nil
 	}
 
 	// Get the referenced PVC
@@ -141,7 +223,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Check if the repository exists (KopiaRepository) - name is in backup.Spec.Repository
 	repository := &backupv1alpha1.KopiaRepository{}
-	err := r.Get(ctx, types.NamespacedName{Name: kBackup.Spec.Repository, Namespace: kBackup.Namespace}, repository)
+	err := r.Get(ctx, types.NamespacedName{Name: kBackup.Spec.Repository}, repository)
 	if err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			// Real error, return
@@ -409,6 +491,16 @@ func (r *KopiaBackupReconciler) findObjectsForPVC(ctx context.Context, pvc clien
 				Namespace: item.GetNamespace(),
 			},
 		}
+	}
+
+	// If no KopiaBackup objects are linked, return a new reconcile.Request with the PVC name
+	if len(requests) == 0 {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      pvc.GetName(),
+				Namespace: pvc.GetNamespace(),
+			},
+		})
 	}
 
 	return requests

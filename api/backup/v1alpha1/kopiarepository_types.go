@@ -82,6 +82,9 @@ type KopiaRepositorySpec struct {
 	// Enables Kopia actions in the repository.
 	EnableActions bool `json:"enableActions"`
 
+	// Cronjob for default schedule if not set in KopiaBackup
+	DefaultSchedule string `json:"defaultSchedule,omitempty"`
+
 	// Password for Kopia repository, ignored if RepositoryPasswordExistingSecret is set
 	RepositoryPassword string `json:"repositoryPassword,omitempty"`
 	// Secret name containing the password for the Kopia repository (must be in the same namespace); the password should be in KOPIA_PASSWORD key

@@ -139,6 +139,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "KopiaRepository")
 		os.Exit(1)
 	}
+	// if err = (&backupcontroller.PVCReconciler{
+	// 	Client: mgr.GetClient(),
+	// 	Scheme: mgr.GetScheme(),
+	// 	Log:    ctrl.Log.WithName("controllers").WithName("PVC"),
+	// }).SetupWithManager(mgr); err != nil {
+	// 	setupLog.Error(err, "unable to create controller", "controller", "PVC")
+	// 	os.Exit(1)
+	// }
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
