@@ -58,6 +58,11 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
 
+      - name: Inject go-build cache into docker
+        uses: reproducible-containers/buildkit-cache-dance@3.1.2
+        with:
+          cache-source: ~/.cache/go-build
+
       - name: Build and push the container image
         uses: docker/build-push-action@v6
         with:
