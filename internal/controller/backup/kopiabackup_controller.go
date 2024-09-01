@@ -442,7 +442,7 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, no
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: "kopia",
+						Name: repo.Spec.SFTPOptions.ConfigMapName,
 					},
 				},
 			},

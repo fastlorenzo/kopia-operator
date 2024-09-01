@@ -125,8 +125,16 @@ spec:
                   (must be in the same namespace); the password should be in KOPIA_PASSWORD
                   key
                 type: string
+              sftpOptions:
+                properties:
+                  configMapName:
+                    description: configMapName is a reference to a ConfigMap containing
+                      the SFTP configuration.
+                    type: string
+                type: object
               storageType:
-                description: Storage type (currently only filesystem is supported)
+                description: Storage type (currently only filesystem and sftp are
+                  supported)
                 type: string
               username:
                 description: Kopia repository username

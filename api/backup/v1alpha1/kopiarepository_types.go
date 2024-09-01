@@ -47,6 +47,11 @@ type KopiaRepositoryStorageFileSystemSpec struct {
 	NFSServer string `json:"nfsServer,omitempty"`
 }
 
+type KopiaRepositoryStorageSFTPSpec struct {
+	// configMapName is a reference to a ConfigMap containing the SFTP configuration.
+	ConfigMapName string `json:"configMapName,omitempty"`
+}
+
 // KopiaRepositoryCachingSpec defines the desired state of KopiaRepositoryCaching
 type KopiaRepositoryCachingSpec struct {
 	CacheDirectory              string `json:"cacheDirectory,omitempty"`
@@ -94,6 +99,8 @@ type KopiaRepositorySpec struct {
 	Caching KopiaRepositoryCachingSpec `json:"caching,omitempty"`
 
 	FileSystemOptions KopiaRepositoryStorageFileSystemSpec `json:"fileSystemOptions,omitempty"`
+
+	SFTPOptions KopiaRepositoryStorageSFTPSpec `json:"sftpOptions,omitempty"`
 }
 
 // KopiaRepositoryStatus defines the observed state of KopiaRepository
