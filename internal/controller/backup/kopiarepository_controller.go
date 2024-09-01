@@ -17,23 +17,23 @@ limitations under the License.
 package backup
 
 import (
-    "context"
-    "slices"
+	"context"
+	"slices"
 
-    "k8s.io/apimachinery/pkg/runtime"
-    ctrl "sigs.k8s.io/controller-runtime"
-    "sigs.k8s.io/controller-runtime/pkg/client"
+	"k8s.io/apimachinery/pkg/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
-    backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
-    "github.com/go-logr/logr"
+	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
+	"github.com/go-logr/logr"
 )
 
 // KopiaRepositoryReconciler reconciles a KopiaRepository object
 type KopiaRepositoryReconciler struct {
-    client.Client
-    Scheme               *runtime.Scheme
-    Log                  logr.Logger
-    SupporedStorageTypes []string
+	client.Client
+	Scheme               *runtime.Scheme
+	Log                  logr.Logger
+	SupporedStorageTypes []string
 }
 
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories,verbs=get;list;watch;create;update;patch;delete
@@ -50,43 +50,43 @@ type KopiaRepositoryReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.3/pkg/reconcile
 func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-    log := r.Log.WithValues("kopiarepository", req.NamespacedName)
+	log := r.Log.WithValues("kopiarepository", req.NamespacedName)
 
-    r.SupporedStorageTypes = []string{"filesystem"}
+	r.SupporedStorageTypes = []string{"filesystem"}
 
-    // Check that the storage type is one of the supported ones
-    // Get all the KopiaRepository objects
-    // For each KopiaRepository object, check if the storage type is supported
-    // If the storage type is not supported, log an error and return
-    // If the storage type is supported, continue with the reconciliation
+	// Check that the storage type is one of the supported ones
+	// Get all the KopiaRepository objects
+	// For each KopiaRepository object, check if the storage type is supported
+	// If the storage type is not supported, log an error and return
+	// If the storage type is supported, continue with the reconciliation
 
-    kopiaRepos := &backupv1alpha1.KopiaRepositoryList{}
-    if err := r.List(ctx, kopiaRepos); err != nil {
-        return ctrl.Result{}, err
-    }
+	kopiaRepos := &backupv1alpha1.KopiaRepositoryList{}
+	if err := r.List(ctx, kopiaRepos); err != nil {
+		return ctrl.Result{}, err
+	}
 
-    // Check each repository for correctnes in configuration
-    for _, repo := range kopiaRepos.Items {
+	// Check each repository for correctnes in configuration
+	for _, repo := range kopiaRepos.Items {
 
-        // Check if Spec.StorageType is supported
-        if !slices.Contains(r.SupporedStorageTypes, repo.Spec.StorageType) {
-            log.Info("unsupported storage type", "storageType", repo.Spec.StorageType, repo.Name)
-            return ctrl.Result{}, nil
-        }
+		// Check if Spec.StorageType is supported
+		if !slices.Contains(r.SupporedStorageTypes, repo.Spec.StorageType) {
+			log.Info("unsupported storage type", "storageType", repo.Spec.StorageType, repo.Name)
+			return ctrl.Result{}, nil
+		}
 
-        // Check if Spec.RepositoryPasswordExistingSecret or Spec.RepositoryPassword is set
-        if repo.Spec.RepositoryPasswordExistingSecret == "" && repo.Spec.RepositoryPassword == "" {
-            log.Info("Either Spec.RepositoryPasswordExistingSecret or Spec.RepositoryPassword must be set", repo.Name)
-            return ctrl.Result{}, nil
-        }
-    }
+		// Check if Spec.RepositoryPasswordExistingSecret or Spec.RepositoryPassword is set
+		if repo.Spec.RepositoryPasswordExistingSecret == "" && repo.Spec.RepositoryPassword == "" {
+			log.Info("Either Spec.RepositoryPasswordExistingSecret or Spec.RepositoryPassword must be set", repo.Name)
+			return ctrl.Result{}, nil
+		}
+	}
 
-    return ctrl.Result{}, nil
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KopiaRepositoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
-    return ctrl.NewControllerManagedBy(mgr).
-        For(&backupv1alpha1.KopiaRepository{}).
-        Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&backupv1alpha1.KopiaRepository{}).
+		Complete(r)
 }

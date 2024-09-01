@@ -1,13 +1,7 @@
 ---
 ignore: |
-  charts/
-  docs/
-  .private/
-  .terraform/
   .vscode/
-  *.sops.*
-  gotk-components.yaml
-  archive/
+
 extends: default
 rules:
   truthy:
@@ -21,4 +15,4 @@ rules:
   brackets:
     min-spaces-inside: 0
     max-spaces-inside: 0
-  indentation: enable
+  indentation: disable

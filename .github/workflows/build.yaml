@@ -1,0 +1,43 @@
+---
+# Lint and build the project, then build the container image and push it to the registry
+name: Build
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v2
+
+      - name: Set up go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.17
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Lint the code
+        run: make lint
+
+      - name: Build and push the container image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/${{ github.repository_name }}:dev
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.title=${{ github.repository_name }}
+            org.opencontainers.image.description=Kopia Controller
+            org.opencontainers.image.source=https://${{ github.repository }}

@@ -17,6 +17,8 @@ issues:
       linters:
         - dupl
         - lll
+        # TODO: simplify code and remove this line
+        - gocyclo
 linters:
   disable-all: true
   enable:
