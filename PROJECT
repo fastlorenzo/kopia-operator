@@ -4,30 +4,29 @@
 # More info: https://book.kubebuilder.io/reference/project-config.html
 domain: cloudinfra.be
 layout:
-  - go.kubebuilder.io/v4
-multigroup: true
+- go.kubebuilder.io/v4
 plugins:
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
 projectName: kopia-operator
 repo: github.com/fastlorenzo/kopia-operator
 resources:
-  - api:
-      crdVersion: v1
-      namespaced: true
-    controller: true
-    domain: cloudinfra.be
-    group: backup
-    kind: KopiaBackup
-    path: github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1
-    version: v1alpha1
-  - api:
-      crdVersion: v1
-      namespaced: true
-    controller: true
-    domain: cloudinfra.be
-    group: backup
-    kind: KopiaRepository
-    path: github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1
-    version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cloudinfra.be
+  group: backup
+  kind: KopiaBackup
+  path: github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cloudinfra.be
+  group: backup
+  kind: KopiaRepository
+  path: github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1
+  version: v1alpha1
 version: "3"

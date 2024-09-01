@@ -1,0 +1,649 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+    control-plane: controller-manager
+  name: kopia-operator
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: kopiabackups.backup.cloudinfra.be
+spec:
+  group: backup.cloudinfra.be
+  names:
+    kind: KopiaBackup
+    listKind: KopiaBackupList
+    plural: kopiabackups
+    singular: kopiabackup
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: KopiaBackup is the Schema for the kopiabackups API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KopiaBackupSpec defines the desired state of KopiaBackup
+            properties:
+              pvcName:
+                description: Name of the PVC to backup
+                type: string
+              repository:
+                description: KopiaRepository to use for the backup
+                type: string
+              schedule:
+                description: Schedule for the backup
+                type: string
+              suspend:
+                description: 'Optional: suspend (default=false) will suspend the cronjob'
+                type: boolean
+            required:
+            - pvcName
+            - repository
+            - schedule
+            type: object
+          status:
+            description: KopiaBackupStatus defines the observed state of KopiaBackup
+            properties:
+              active:
+                type: boolean
+              fromAnnotation:
+                type: boolean
+            required:
+            - active
+            - fromAnnotation
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: kopiarepositories.backup.cloudinfra.be
+spec:
+  group: backup.cloudinfra.be
+  names:
+    kind: KopiaRepository
+    listKind: KopiaRepositoryList
+    plural: kopiarepositories
+    singular: kopiarepository
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: KopiaRepository is the Schema for the kopiarepositories API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KopiaRepositorySpec defines the desired state of KopiaRepository
+            properties:
+              caching:
+                description: FormatBlobCacheDuration time.Duration              `json:"formatBlobCacheDuration,omitempty"`
+                properties:
+                  cacheDirectory:
+                    type: string
+                  contentCacheSizeLimitBytes:
+                    format: int64
+                    type: integer
+                  maxCacheSize:
+                    format: int64
+                    type: integer
+                  maxListCacheDuration:
+                    format: int64
+                    type: integer
+                  maxMetadataCacheSize:
+                    format: int64
+                    type: integer
+                  metadataCacheSizeLimitBytes:
+                    format: int64
+                    type: integer
+                  minContentSweepAge:
+                    format: int64
+                    type: integer
+                  minIndexSweepAge:
+                    format: int64
+                    type: integer
+                  minMetadataSweepAge:
+                    format: int64
+                    type: integer
+                type: object
+              defaultSchedule:
+                description: Cronjob for default schedule if not set in KopiaBackup
+                type: string
+              description:
+                description: Human-readable description of the repository to use in
+                  the UI.
+                type: string
+              enableActions:
+                description: Enables Kopia actions in the repository.
+                type: boolean
+              fileSystemOptions:
+                properties:
+                  dirMode:
+                    description: DirectoryMode in the repository.
+                    format: int32
+                    type: integer
+                  fileMode:
+                    description: FileMode in the repository.
+                    format: int32
+                    type: integer
+                  gid:
+                    description: Group ID of the files in the repository.
+                    type: integer
+                  nfsPath:
+                    description: Export path on the NFS server for the repository.
+                    type: string
+                  nfsServer:
+                    description: NFS server for the repository.
+                    type: string
+                  path:
+                    description: Path is the path to the repository on the filesystem.
+                    type: string
+                  uid:
+                    description: User ID of the files in the repository.
+                    type: integer
+                required:
+                - path
+                type: object
+              hostname:
+                description: Kopia repository hostname
+                type: string
+              permissiveCacheLoading:
+                description: Allow loading from cache even if it's stale
+                type: boolean
+              readonly:
+                description: Make the repository read-only
+                type: boolean
+              repositoryPassword:
+                description: Password for Kopia repository, ignored if RepositoryPasswordExistingSecret
+                  is set
+                type: string
+              repositoryPasswordExistingSecret:
+                description: Secret name containing the password for the Kopia repository
+                  (must be in the same namespace); the password should be in KOPIA_PASSWORD
+                  key
+                type: string
+              storageType:
+                description: Storage type (currently only filesystem is supported)
+                type: string
+              username:
+                description: Kopia repository username
+                type: string
+            required:
+            - enableActions
+            - hostname
+            - storageType
+            - username
+            type: object
+          status:
+            description: KopiaRepositoryStatus defines the observed state of KopiaRepository
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-controller-manager
+  namespace: kopia-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-leader-election-role
+  namespace: kopia-operator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-kopiabackup-editor-role
+rules:
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiabackups
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiabackups/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-kopiabackup-viewer-role
+rules:
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiabackups
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiabackups/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-kopiarepository-editor-role
+rules:
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiarepositories
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiarepositories/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-kopiarepository-viewer-role
+rules:
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiarepositories
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiarepositories/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kopia-operator-manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiabackups
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiabackups/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiabackups/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiarepositories
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiarepositories/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - backup.cloudinfra.be
+  resources:
+  - kopiarepositories/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-metrics-reader
+rules:
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-proxy-role
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-leader-election-rolebinding
+  namespace: kopia-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kopia-operator-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: kopia-operator-controller-manager
+  namespace: kopia-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kopia-operator-manager-role
+subjects:
+- kind: ServiceAccount
+  name: kopia-operator-controller-manager
+  namespace: kopia-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+  name: kopia-operator-proxy-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kopia-operator-proxy-role
+subjects:
+- kind: ServiceAccount
+  name: kopia-operator-controller-manager
+  namespace: kopia-operator
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+    control-plane: controller-manager
+  name: kopia-operator-controller-manager-metrics-service
+  namespace: kopia-operator
+spec:
+  ports:
+  - name: https
+    port: 8443
+    protocol: TCP
+    targetPort: https
+  selector:
+    control-plane: controller-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kopia-operator
+    control-plane: controller-manager
+  name: kopia-operator-controller-manager
+  namespace: kopia-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        control-plane: controller-manager
+    spec:
+      containers:
+      - args:
+        - --secure-listen-address=0.0.0.0:8443
+        - --upstream=http://127.0.0.1:8080/
+        - --logtostderr=true
+        - --v=0
+        image: gcr.io/kubebuilder/kube-rbac-proxy:v0.16.0
+        name: kube-rbac-proxy
+        ports:
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 5m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      - args:
+        - --health-probe-bind-address=:8081
+        - --metrics-bind-address=127.0.0.1:8080
+        - --leader-elect
+        command:
+        - /manager
+        image: ghcr.io/fastlorenzo/kopia-operator:dev
+        imagePullPolicy: Always
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: manager
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      securityContext:
+        runAsNonRoot: true
+      serviceAccountName: kopia-operator-controller-manager
+      terminationGracePeriodSeconds: 10
