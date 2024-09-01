@@ -64,7 +64,7 @@ jobs:
         with:
           cache-map: |
             {
-              "~/.cache/go-build": "/root/.cache/go-build",
+              "~/.cache/go-build": "/root/.cache/go-build"
             }
           skip-extraction: ${{ steps.go-cache.outputs.cache-hit }}
 
