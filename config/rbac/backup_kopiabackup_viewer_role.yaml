@@ -7,17 +7,17 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: kopiabackup-viewer-role
 rules:
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiabackups
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiabackups/status
-  verbs:
-  - get
+  - apiGroups:
+      - backup.cloudinfra.be
+    resources:
+      - kopiabackups
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - backup.cloudinfra.be
+    resources:
+      - kopiabackups/status
+    verbs:
+      - get

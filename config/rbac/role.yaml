@@ -4,83 +4,83 @@ kind: ClusterRole
 metadata:
   name: manager-role
 rules:
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiabackups
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiabackups/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiabackups/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiarepositories
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiarepositories/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiarepositories/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - batch
-  resources:
-  - cronjobs
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - backup.cloudinfra.be
+    resources:
+      - kopiabackups
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - backup.cloudinfra.be
+    resources:
+      - kopiabackups/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - backup.cloudinfra.be
+    resources:
+      - kopiabackups/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - backup.cloudinfra.be
+    resources:
+      - kopiarepositories
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - backup.cloudinfra.be
+    resources:
+      - kopiarepositories/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - backup.cloudinfra.be
+    resources:
+      - kopiarepositories/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - batch
+    resources:
+      - cronjobs
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch

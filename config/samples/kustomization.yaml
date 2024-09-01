@@ -1,6 +1,6 @@
 ## Append samples of your project ##
 resources:
-- backup_v1alpha1_kopiabackup.yaml
-- backup_v1alpha1_kopiarepository.yaml
-- backup_v1alpha1_kopiasftprepository.yaml
+  - backup_v1alpha1_kopiabackup.yaml
+  - backup_v1alpha1_kopiarepository.yaml
+  - backup_v1alpha1_kopiasftprepository.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

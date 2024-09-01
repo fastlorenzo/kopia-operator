@@ -14,134 +14,137 @@ spec:
     singular: kopiarepository
   scope: Namespaced
   versions:
-  - name: v1alpha1
-    schema:
-      openAPIV3Schema:
-        description: KopiaRepository is the Schema for the kopiarepositories API
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            description: KopiaRepositorySpec defines the desired state of KopiaRepository
-            properties:
-              caching:
-                description: FormatBlobCacheDuration time.Duration              `json:"formatBlobCacheDuration,omitempty"`
-                properties:
-                  cacheDirectory:
-                    type: string
-                  contentCacheSizeLimitBytes:
-                    format: int64
-                    type: integer
-                  maxCacheSize:
-                    format: int64
-                    type: integer
-                  maxListCacheDuration:
-                    format: int64
-                    type: integer
-                  maxMetadataCacheSize:
-                    format: int64
-                    type: integer
-                  metadataCacheSizeLimitBytes:
-                    format: int64
-                    type: integer
-                  minContentSweepAge:
-                    format: int64
-                    type: integer
-                  minIndexSweepAge:
-                    format: int64
-                    type: integer
-                  minMetadataSweepAge:
-                    format: int64
-                    type: integer
-                type: object
-              defaultSchedule:
-                description: Cronjob for default schedule if not set in KopiaBackup
-                type: string
-              description:
-                description: Human-readable description of the repository to use in
-                  the UI.
-                type: string
-              enableActions:
-                description: Enables Kopia actions in the repository.
-                type: boolean
-              fileSystemOptions:
-                properties:
-                  dirMode:
-                    description: DirectoryMode in the repository.
-                    format: int32
-                    type: integer
-                  fileMode:
-                    description: FileMode in the repository.
-                    format: int32
-                    type: integer
-                  gid:
-                    description: Group ID of the files in the repository.
-                    type: integer
-                  nfsPath:
-                    description: Export path on the NFS server for the repository.
-                    type: string
-                  nfsServer:
-                    description: NFS server for the repository.
-                    type: string
-                  path:
-                    description: Path is the path to the repository on the filesystem.
-                    type: string
-                  uid:
-                    description: User ID of the files in the repository.
-                    type: integer
-                required:
-                - path
-                type: object
-              hostname:
-                description: Kopia repository hostname
-                type: string
-              permissiveCacheLoading:
-                description: Allow loading from cache even if it's stale
-                type: boolean
-              readonly:
-                description: Make the repository read-only
-                type: boolean
-              repositoryPassword:
-                description: Password for Kopia repository, ignored if RepositoryPasswordExistingSecret
-                  is set
-                type: string
-              repositoryPasswordExistingSecret:
-                description: Secret name containing the password for the Kopia repository
-                  (must be in the same namespace); the password should be in KOPIA_PASSWORD
-                  key
-                type: string
-              storageType:
-                description: Storage type (currently only filesystem is supported)
-                type: string
-              username:
-                description: Kopia repository username
-                type: string
-            required:
-            - enableActions
-            - hostname
-            - storageType
-            - username
-            type: object
-          status:
-            description: KopiaRepositoryStatus defines the observed state of KopiaRepository
-            type: object
-        type: object
-    served: true
-    storage: true
-    subresources:
-      status: {}
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: KopiaRepository is the Schema for the kopiarepositories API
+          properties:
+            apiVersion:
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+              type: string
+            kind:
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: KopiaRepositorySpec defines the desired state of KopiaRepository
+              properties:
+                caching:
+                  description: FormatBlobCacheDuration time.Duration              `json:"formatBlobCacheDuration,omitempty"`
+                  properties:
+                    cacheDirectory:
+                      type: string
+                    contentCacheSizeLimitBytes:
+                      format: int64
+                      type: integer
+                    maxCacheSize:
+                      format: int64
+                      type: integer
+                    maxListCacheDuration:
+                      format: int64
+                      type: integer
+                    maxMetadataCacheSize:
+                      format: int64
+                      type: integer
+                    metadataCacheSizeLimitBytes:
+                      format: int64
+                      type: integer
+                    minContentSweepAge:
+                      format: int64
+                      type: integer
+                    minIndexSweepAge:
+                      format: int64
+                      type: integer
+                    minMetadataSweepAge:
+                      format: int64
+                      type: integer
+                  type: object
+                defaultSchedule:
+                  description: Cronjob for default schedule if not set in KopiaBackup
+                  type: string
+                description:
+                  description:
+                    Human-readable description of the repository to use in
+                    the UI.
+                  type: string
+                enableActions:
+                  description: Enables Kopia actions in the repository.
+                  type: boolean
+                fileSystemOptions:
+                  properties:
+                    dirMode:
+                      description: DirectoryMode in the repository.
+                      format: int32
+                      type: integer
+                    fileMode:
+                      description: FileMode in the repository.
+                      format: int32
+                      type: integer
+                    gid:
+                      description: Group ID of the files in the repository.
+                      type: integer
+                    nfsPath:
+                      description: Export path on the NFS server for the repository.
+                      type: string
+                    nfsServer:
+                      description: NFS server for the repository.
+                      type: string
+                    path:
+                      description: Path is the path to the repository on the filesystem.
+                      type: string
+                    uid:
+                      description: User ID of the files in the repository.
+                      type: integer
+                  required:
+                    - path
+                  type: object
+                hostname:
+                  description: Kopia repository hostname
+                  type: string
+                permissiveCacheLoading:
+                  description: Allow loading from cache even if it's stale
+                  type: boolean
+                readonly:
+                  description: Make the repository read-only
+                  type: boolean
+                repositoryPassword:
+                  description:
+                    Password for Kopia repository, ignored if RepositoryPasswordExistingSecret
+                    is set
+                  type: string
+                repositoryPasswordExistingSecret:
+                  description:
+                    Secret name containing the password for the Kopia repository
+                    (must be in the same namespace); the password should be in KOPIA_PASSWORD
+                    key
+                  type: string
+                storageType:
+                  description: Storage type (currently only filesystem is supported)
+                  type: string
+                username:
+                  description: Kopia repository username
+                  type: string
+              required:
+                - enableActions
+                - hostname
+                - storageType
+                - username
+              type: object
+            status:
+              description: KopiaRepositoryStatus defines the observed state of KopiaRepository
+              type: object
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}

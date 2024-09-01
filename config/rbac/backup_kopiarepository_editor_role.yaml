@@ -7,21 +7,21 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: kopiarepository-editor-role
 rules:
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiarepositories
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiarepositories/status
-  verbs:
-  - get
+  - apiGroups:
+      - backup.cloudinfra.be
+    resources:
+      - kopiarepositories
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - backup.cloudinfra.be
+    resources:
+      - kopiarepositories/status
+    verbs:
+      - get
