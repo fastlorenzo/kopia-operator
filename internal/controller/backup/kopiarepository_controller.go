@@ -52,7 +52,7 @@ type KopiaRepositoryReconciler struct {
 func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("kopiarepository", req.NamespacedName)
 
-	r.SupporedStorageTypes = []string{"filesystem"}
+	r.SupporedStorageTypes = []string{"filesystem", "sftp"}
 
 	// Check that the storage type is one of the supported ones
 	// Get all the KopiaRepository objects

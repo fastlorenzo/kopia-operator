@@ -396,6 +396,59 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, no
 
 	var envFrom = []corev1.EnvFromSource{}
 
+	var volumeMounts = []corev1.VolumeMount{
+		{
+			Name:      "data",
+			MountPath: mountPath,
+		},
+	}
+
+	var volumes = []corev1.Volume{
+		{
+			Name: "data",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: backup.Spec.PVCName,
+				},
+			},
+		},
+	}
+
+	if repo.Spec.StorageType == "filesystem" {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "repo",
+			MountPath: repo.Spec.FileSystemOptions.Path,
+		})
+
+		volumes = append(volumes, corev1.Volume{
+			Name: "repo",
+			VolumeSource: corev1.VolumeSource{
+				NFS: &corev1.NFSVolumeSource{
+					Server: repo.Spec.FileSystemOptions.NFSServer,
+					Path:   repo.Spec.FileSystemOptions.NFSPath,
+				},
+			},
+		})
+
+	} else if repo.Spec.StorageType == "sftp" {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "config",
+			MountPath: "/config/repository.config",
+			SubPath:   "repository.config",
+		})
+
+		volumes = append(volumes, corev1.Volume{
+			Name: "config",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: "kopia",
+					},
+				},
+			},
+		})
+	}
+
 	if repo.Spec.RepositoryPasswordExistingSecret != "" {
 		envFrom = append(envFrom, corev1.EnvFromSource{
 			SecretRef: &corev1.SecretEnvSource{
@@ -455,47 +508,20 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, no
 									Name:  "snapshot",
 									Image: "ghcr.io/fastlorenzo/kopia:0.16.1@sha256:e473aeb43e13e298853898c3613da2a4834f4bff2ccf747fbb2a90072d9e92c8",
 									Args: []string{"/bin/bash", "-c", "" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/07] Create repo ...\"              && [[ ! -f " + repo.Spec.FileSystemOptions.Path + "/kopia.repository.f ]] && kopia repository create filesystem --path=" + repo.Spec.FileSystemOptions.Path + "\n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/07] Connect to repo ...\"          && kopia repo connect filesystem --path=" + repo.Spec.FileSystemOptions.Path + " --override-hostname=" + repo.Spec.Hostname + " --override-username=" + repo.Spec.Username + "\n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[03/07] Create snapshot ...\"          && kopia snap create " + mountPath + "\n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[04/07] List snapshots ...\"           && kopia snap list " + mountPath + "\n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[05/07] Show stats ...\"               && kopia content stats \n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[06/07] Show maintenance info ...\"      && kopia maintenance info \n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[07/07] Disconnect repo ...\"           && kopia repo disconnect \n",
+										// "printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/07] Create repo ...\"              && [[ ! -f " + repo.Spec.FileSystemOptions.Path + "/kopia.repository.f ]] && kopia repository create filesystem --path=" + repo.Spec.FileSystemOptions.Path + "\n" +
+										// "printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/07] Connect to repo ...\"          && kopia repo connect filesystem --path=" + repo.Spec.FileSystemOptions.Path + " --override-hostname=" + repo.Spec.Hostname + " --override-username=" + repo.Spec.Username + "\n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/05] Create snapshot ...\"          && kopia snap create " + mountPath + "\n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/05] List snapshots ...\"           && kopia snap list " + mountPath + "\n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[03/05] Show stats ...\"               && kopia content stats \n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[04/05] Show maintenance info ...\"      && kopia maintenance info \n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[05/05] Disconnect repo ...\"           && kopia repo disconnect \n",
 									},
-									Env:     envVars,
-									EnvFrom: envFrom,
-									VolumeMounts: []corev1.VolumeMount{
-										{
-											Name:      "data",
-											MountPath: mountPath,
-										},
-										{
-											Name:      "repo",
-											MountPath: repo.Spec.FileSystemOptions.Path,
-										},
-									},
+									Env:          envVars,
+									EnvFrom:      envFrom,
+									VolumeMounts: volumeMounts,
 								},
 							},
-							Volumes: []corev1.Volume{
-								{
-									Name: "data",
-									VolumeSource: corev1.VolumeSource{
-										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-											ClaimName: backup.Spec.PVCName,
-										},
-									},
-								},
-								{
-									Name: "repo",
-									VolumeSource: corev1.VolumeSource{
-										NFS: &corev1.NFSVolumeSource{
-											Server: repo.Spec.FileSystemOptions.NFSServer,
-											Path:   repo.Spec.FileSystemOptions.NFSPath,
-										},
-									},
-								},
-							},
+							Volumes:       volumes,
 							RestartPolicy: corev1.RestartPolicyOnFailure,
 							Tolerations: []corev1.Toleration{
 								{

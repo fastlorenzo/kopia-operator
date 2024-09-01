@@ -70,7 +70,7 @@ type KopiaRepositorySpec struct {
 	Hostname string `json:"hostname"`
 	// Kopia repository username
 	Username string `json:"username"`
-	// Storage type (currently only filesystem is supported)
+	// Storage type (currently only filesystem and sftp are supported)
 	StorageType string `json:"storageType"`
 
 	// Make the repository read-only
