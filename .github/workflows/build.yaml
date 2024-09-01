@@ -51,16 +51,19 @@ jobs:
           username: "${{ github.actor }}"
           password: "${{ secrets.GITHUB_TOKEN }}"
 
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}:dev
+
       - name: Build and push the container image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}:dev
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          labels: |
-            org.opencontainers.image.title=${{ github.repository }}
-            org.opencontainers.image.description=Kopia Controller
-            org.opencontainers.image.source=https://${{ github.repository }}
