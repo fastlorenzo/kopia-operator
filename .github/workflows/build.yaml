@@ -1,5 +1,5 @@
 ---
-# Lint and build the project, then build the container image and push it to the registry
+# Lint and build the project, then build the container image and push it to the ghcr registry
 name: Build
 on:
   push:
