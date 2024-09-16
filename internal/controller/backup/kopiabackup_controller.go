@@ -510,11 +510,11 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, no
 									Args: []string{"/bin/bash", "-c", "" +
 										// "printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/07] Create repo ...\"              && [[ ! -f " + repo.Spec.FileSystemOptions.Path + "/kopia.repository.f ]] && kopia repository create filesystem --path=" + repo.Spec.FileSystemOptions.Path + "\n" +
 										// "printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/07] Connect to repo ...\"          && kopia repo connect filesystem --path=" + repo.Spec.FileSystemOptions.Path + " --override-hostname=" + repo.Spec.Hostname + " --override-username=" + repo.Spec.Username + "\n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/05] Create snapshot ...\"          && kopia snap create " + mountPath + "\n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/05] List snapshots ...\"           && kopia snap list " + mountPath + "\n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[03/05] Show stats ...\"               && kopia content stats \n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[04/05] Show maintenance info ...\"      && kopia maintenance info \n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[05/05] Disconnect repo ...\"           && kopia repo disconnect \n",
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/04] Create snapshot ...\"          && kopia snap create " + mountPath + "\n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/04] List snapshots ...\"           && kopia snap list " + mountPath + "\n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[03/04] Show stats ...\"               && kopia content stats \n" +
+										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[04/04] Show maintenance info ...\"      && kopia maintenance info \n",
+									// "printf \"\\e[1;32m%-6s\\e[m\\n\" \"[05/05] Disconnect repo ...\"           && kopia repo disconnect \n",
 									},
 									Env:          envVars,
 									EnvFrom:      envFrom,
