@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -344,13 +345,14 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	} else {
 		log.Info("Skip reconcile: CronJob already exists", "CronJob.Namespace", found.Namespace, "CronJob.Name", found.Name)
 		// Check if the following has changed: schedule, suspend, container image, PVC name, node name
-		if found.Spec.Schedule != newCronJob.Spec.Schedule ||
-			(found.Spec.Suspend != nil && newCronJob.Spec.Suspend != nil && *found.Spec.Suspend != *newCronJob.Spec.Suspend) ||
-			len(found.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 && len(newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 &&
-				(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image != newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image ||
-					len(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 && len(newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 &&
-						found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1] != newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1]) ||
-			found.Spec.JobTemplate.Spec.Template.Spec.NodeName != newCronJob.Spec.JobTemplate.Spec.Template.Spec.NodeName || len(found.Spec.JobTemplate.Spec.Template.Spec.InitContainers) != len(newCronJob.Spec.JobTemplate.Spec.Template.Spec.InitContainers) {
+		// if found.Spec.Schedule != newCronJob.Spec.Schedule ||
+		// 	(found.Spec.Suspend != nil && newCronJob.Spec.Suspend != nil && *found.Spec.Suspend != *newCronJob.Spec.Suspend) ||
+		// 	len(found.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 && len(newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 &&
+		// 		(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image != newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image ||
+		// 			len(found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 && len(newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 1 &&
+		// 				found.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1] != newCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[1]) ||
+		// 	found.Spec.JobTemplate.Spec.Template.Spec.NodeName != newCronJob.Spec.JobTemplate.Spec.Template.Spec.NodeName || len(found.Spec.JobTemplate.Spec.Template.Spec.InitContainers) != len(newCronJob.Spec.JobTemplate.Spec.Template.Spec.InitContainers) {
+		if shouldUpdateCronJob(found, newCronJob) {
 			log.Info("Updating CronJob", "CronJob.Namespace", found.Namespace, "CronJob.Name", found.Name)
 			found.Spec = newCronJob.Spec
 			err = r.Update(ctx, found)
@@ -363,6 +365,14 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Update status or other finalization
 	return ctrl.Result{}, nil
+}
+
+func shouldUpdateCronJob(found *batchv1.CronJob, new *batchv1.CronJob) bool {
+
+	// this function should return true if the cronjobs are different and need to be updated
+	// else return false
+
+	return !reflect.DeepEqual(found.Spec, new.Spec)
 }
 
 func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, nodeName string, appName string, repo *backupv1alpha1.KopiaRepository) *batchv1.CronJob {
@@ -501,7 +511,24 @@ func constructCronJob(backup *backupv1alpha1.KopiaBackup, cronJobName string, no
 							},
 						},
 						Spec: corev1.PodSpec{
-							NodeName:       nodeName,
+							// NodeName:       nodeName,
+							Affinity: &corev1.Affinity{
+								NodeAffinity: &corev1.NodeAffinity{
+									RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+										NodeSelectorTerms: []corev1.NodeSelectorTerm{
+											{
+												MatchExpressions: []corev1.NodeSelectorRequirement{
+													{
+														Key:      "kubernetes.io/hostname",
+														Operator: corev1.NodeSelectorOpIn,
+														Values:   []string{nodeName},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
 							InitContainers: initContainers,
 							Containers: []corev1.Container{
 								{
