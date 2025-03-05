@@ -100,7 +100,8 @@ type KopiaRepositorySpec struct {
 	// Secret name containing the password for the Kopia repository (must be in the same namespace); the password should be in KOPIA_PASSWORD key
 	RepositoryPasswordExistingSecret string `json:"repositoryPasswordExistingSecret,omitempty"`
 
-	// FormatBlobCacheDuration time.Duration              `json:"formatBlobCacheDuration,omitempty"`
+	// +kubebuilder:default:=900000000000
+	FormatBlobCacheDuration int64 `json:"formatBlobCacheDuration,omitempty"`
 
 	// Caching options for the repository.
 	// +kubebuilder:default:={}

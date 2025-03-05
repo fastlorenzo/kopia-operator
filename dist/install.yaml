@@ -195,6 +195,10 @@ spec:
                 required:
                 - path
                 type: object
+              formatBlobCacheDuration:
+                default: 900000000000
+                format: int64
+                type: integer
               hostname:
                 description: Kopia repository hostname
                 type: string

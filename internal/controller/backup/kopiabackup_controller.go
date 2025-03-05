@@ -750,7 +750,7 @@ func constructConfigMap(backup *backupv1alpha1.KopiaBackup, repo *backupv1alpha1
 		repo.Spec.Username,
 		repo.Spec.Description,
 		repo.Spec.EnableActions,
-		repo.Spec.Caching.MinContentSweepAge,
+		repo.Spec.FormatBlobCacheDuration,
 	)
 
 	configMap := &corev1.ConfigMap{
