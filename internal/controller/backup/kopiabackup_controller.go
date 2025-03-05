@@ -660,6 +660,7 @@ func constructCronJob(
 								"backup.cloudinfra.be/pvc-name":  backup.Spec.PVCName,
 								"backup.cloudinfra.be/node-name": nodeName,
 								"app.kubernetes.io/name":         appName,
+								"sidecar.istio.io/inject":        "false",
 							},
 						},
 						Spec: corev1.PodSpec{
