@@ -103,6 +103,7 @@ type KopiaRepositorySpec struct {
 	// FormatBlobCacheDuration time.Duration              `json:"formatBlobCacheDuration,omitempty"`
 
 	// Caching options for the repository.
+	// +kubebuilder:default:={}
 	Caching KopiaRepositoryCachingSpec `json:"caching,omitempty"`
 
 	FileSystemOptions KopiaRepositoryStorageFileSystemSpec `json:"fileSystemOptions,omitempty"`

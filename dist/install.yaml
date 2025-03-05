@@ -122,6 +122,7 @@ spec:
             description: KopiaRepositorySpec defines the desired state of KopiaRepository
             properties:
               caching:
+                default: {}
                 description: Caching options for the repository.
                 properties:
                   cacheDirectory:
