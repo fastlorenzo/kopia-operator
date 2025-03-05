@@ -54,15 +54,19 @@ type KopiaRepositoryStorageSFTPSpec struct {
 
 // KopiaRepositoryCachingSpec defines the desired state of KopiaRepositoryCaching
 type KopiaRepositoryCachingSpec struct {
-	CacheDirectory              string `json:"cacheDirectory,omitempty"`
-	ContentCacheSizeBytes       int64  `json:"maxCacheSize,omitempty"`
-	ContentCacheSizeLimitBytes  int64  `json:"contentCacheSizeLimitBytes,omitempty"`
-	MetadataCacheSizeBytes      int64  `json:"maxMetadataCacheSize,omitempty"`
-	MetadataCacheSizeLimitBytes int64  `json:"metadataCacheSizeLimitBytes,omitempty"`
-	MaxListCacheDuration        int64  `json:"maxListCacheDuration,omitempty"`
-	MinMetadataSweepAge         int64  `json:"minMetadataSweepAge,omitempty"`
-	MinContentSweepAge          int64  `json:"minContentSweepAge,omitempty"`
-	MinIndexSweepAge            int64  `json:"minIndexSweepAge,omitempty"`
+	// +kubebuilder:default:="cache"
+	CacheDirectory string `json:"cacheDirectory,omitempty"`
+	// +kubebuilder:default:=5242880000
+	ContentCacheSizeBytes      int64 `json:"maxCacheSize,omitempty"`
+	ContentCacheSizeLimitBytes int64 `json:"contentCacheSizeLimitBytes,omitempty"`
+	// +kubebuilder:default:=5242880000
+	MetadataCacheSizeBytes      int64 `json:"maxMetadataCacheSize,omitempty"`
+	MetadataCacheSizeLimitBytes int64 `json:"metadataCacheSizeLimitBytes,omitempty"`
+	// +kubebuilder:default:=30
+	MaxListCacheDuration int64 `json:"maxListCacheDuration,omitempty"`
+	MinMetadataSweepAge  int64 `json:"minMetadataSweepAge,omitempty"`
+	MinContentSweepAge   int64 `json:"minContentSweepAge,omitempty"`
+	MinIndexSweepAge     int64 `json:"minIndexSweepAge,omitempty"`
 	// HMACSecret                  []byte `json:"-"`
 }
 
@@ -83,6 +87,7 @@ type KopiaRepositorySpec struct {
 	// Allow loading from cache even if it's stale
 	PermissiveCacheLoading bool `json:"permissiveCacheLoading,omitempty"`
 	// Human-readable description of the repository to use in the UI.
+	// +kubebuilder:default:=Cluster
 	Description string `json:"description,omitempty"`
 	// Enables Kopia actions in the repository.
 	EnableActions bool `json:"enableActions"`
@@ -96,6 +101,8 @@ type KopiaRepositorySpec struct {
 	RepositoryPasswordExistingSecret string `json:"repositoryPasswordExistingSecret,omitempty"`
 
 	// FormatBlobCacheDuration time.Duration              `json:"formatBlobCacheDuration,omitempty"`
+
+	// Caching options for the repository.
 	Caching KopiaRepositoryCachingSpec `json:"caching,omitempty"`
 
 	FileSystemOptions KopiaRepositoryStorageFileSystemSpec `json:"fileSystemOptions,omitempty"`
