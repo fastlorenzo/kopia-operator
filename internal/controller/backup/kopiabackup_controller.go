@@ -26,6 +26,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
@@ -530,7 +531,7 @@ func constructCronJob(
 	} else {
 		mountPath = "/data/" + backup.Namespace + "/" + backup.Spec.PVCName
 	}
-	var kopiaCacheDirectory = filepath.Join(repo.Spec.FileSystemOptions.Path, ".kopia", "cache")
+	var kopiaCacheDirectory = repo.Spec.Caching.CacheDirectory
 	var kopiaLogDir = filepath.Join(repo.Spec.FileSystemOptions.Path, ".kopia", "logs")
 
 	var envVars = []corev1.EnvVar{
@@ -608,6 +609,21 @@ func constructCronJob(
 					},
 				},
 			},
+		},
+			// emptyDir for kopia cache
+			corev1.Volume{
+				Name: "kopia-cache",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{
+						SizeLimit: resource.NewQuantity(1<<30, resource.BinarySI), // 1GiB
+					},
+				},
+			},
+		)
+
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "kopia-cache",
+			MountPath: kopiaCacheDirectory,
 		})
 	}
 
@@ -649,9 +665,11 @@ func constructCronJob(
 			Namespace: backup.Namespace,
 		},
 		Spec: batchv1.CronJobSpec{
-			ConcurrencyPolicy: batchv1.ForbidConcurrent,
-			Schedule:          backup.Spec.Schedule,
-			Suspend:           &backup.Spec.Suspend,
+			ConcurrencyPolicy:          batchv1.ForbidConcurrent,
+			Schedule:                   backup.Spec.Schedule,
+			Suspend:                    &backup.Spec.Suspend,
+			SuccessfulJobsHistoryLimit: func(i int32) *int32 { return &i }(1),
+			FailedJobsHistoryLimit:     func(i int32) *int32 { return &i }(1),
 			JobTemplate: batchv1.JobTemplateSpec{
 				Spec: batchv1.JobSpec{
 					Template: corev1.PodTemplateSpec{
