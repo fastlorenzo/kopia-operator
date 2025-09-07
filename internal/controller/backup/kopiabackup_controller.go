@@ -615,7 +615,7 @@ func constructCronJob(
 				Name: "kopia-cache",
 				VolumeSource: corev1.VolumeSource{
 					EmptyDir: &corev1.EmptyDirVolumeSource{
-						SizeLimit: resource.NewQuantity(1<<30, resource.BinarySI), // 1GiB
+						SizeLimit: resource.NewQuantity(2<<30, resource.BinarySI), // 2GiB
 					},
 				},
 			},
