@@ -37,6 +37,11 @@ type KopiaBackupSpec struct {
 
 	// Optional: suspend (default=false) will suspend the cronjob
 	Suspend bool `json:"suspend,omitempty"`
+
+	// Server user credentials secret name (auto-generated, read-only)
+	// This field is populated by the operator when server mode is enabled
+	// Contains username and password for authenticating to the Kopia Server
+	UserCredentialsSecret string `json:"userCredentialsSecret,omitempty"`
 }
 
 // KopiaBackupStatus defines the observed state of KopiaBackup
@@ -46,6 +51,21 @@ type KopiaBackupStatus struct {
 
 	Active         bool `json:"active"`
 	FromAnnotation bool `json:"fromAnnotation"`
+
+	// Server connection status (when server mode is enabled)
+	ServerURL string `json:"serverURL,omitempty"`
+
+	// Username used for server authentication
+	Username string `json:"username,omitempty"`
+
+	// Whether the backup is connected to the server
+	Connected bool `json:"connected,omitempty"`
+
+	// Timestamp of the last successful backup
+	LastBackupTime *metav1.Time `json:"lastBackupTime,omitempty"`
+
+	// Conditions represent the latest available observations of the backup's state
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 //+kubebuilder:object:root=true

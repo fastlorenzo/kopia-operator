@@ -21,7 +21,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -46,25 +48,81 @@ var _ = Describe("KopiaBackup Controller", func() {
 			By("creating the custom resource for the Kind KopiaBackup")
 			err := k8sClient.Get(ctx, typeNamespacedName, kopiabackup)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &backupv1alpha1.KopiaBackup{
+				// Create the PVC first
+				pvc := &corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pvc",
+						Namespace: "default",
+					},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{
+							corev1.ReadWriteOnce,
+						},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+
+				// Create the KopiaRepository
+				repo := &backupv1alpha1.KopiaRepository{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-repo",
+						Namespace: "default",
+					},
+					Spec: backupv1alpha1.KopiaRepositorySpec{
+						Hostname:           "test-host",
+						Username:           "test-user",
+						StorageType:        "filesystem",
+						RepositoryPassword: "test-password",
+						FileSystemOptions: backupv1alpha1.KopiaRepositoryStorageFileSystemSpec{
+							Path: "/tmp/test-repo",
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, repo)).To(Succeed())
+
+				// Create the KopiaBackup
+				backup := &backupv1alpha1.KopiaBackup{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: backupv1alpha1.KopiaBackupSpec{
+						PVCName:    "test-pvc",
+						Schedule:   "0 2 * * *",
+						Repository: "test-repo",
+					},
 				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+				Expect(k8sClient.Create(ctx, backup)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
+			// Cleanup logic after each test, like removing the resource instance.
 			resource := &backupv1alpha1.KopiaBackup{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance KopiaBackup")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			// Clean up repository
+			repo := &backupv1alpha1.KopiaRepository{}
+			repoKey := types.NamespacedName{Name: "test-repo", Namespace: "default"}
+			if err := k8sClient.Get(ctx, repoKey, repo); err == nil {
+				Expect(k8sClient.Delete(ctx, repo)).To(Succeed())
+			}
+
+			// Clean up PVC
+			pvc := &corev1.PersistentVolumeClaim{}
+			pvcKey := types.NamespacedName{Name: "test-pvc", Namespace: "default"}
+			if err := k8sClient.Get(ctx, pvcKey, pvc); err == nil {
+				Expect(k8sClient.Delete(ctx, pvc)).To(Succeed())
+			}
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")

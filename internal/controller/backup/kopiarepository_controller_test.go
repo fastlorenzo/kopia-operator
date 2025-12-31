@@ -51,7 +51,15 @@ var _ = Describe("KopiaRepository Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: backupv1alpha1.KopiaRepositorySpec{
+						Hostname:           "test-host",
+						Username:           "test-user",
+						StorageType:        "filesystem",
+						RepositoryPassword: "test-password",
+						FileSystemOptions: backupv1alpha1.KopiaRepositoryStorageFileSystemSpec{
+							Path: "/tmp/test-repo",
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

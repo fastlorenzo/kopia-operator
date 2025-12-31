@@ -18,8 +18,11 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,49 +42,161 @@ type KopiaRepositoryReconciler struct {
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the KopiaRepository object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.3/pkg/reconcile
 func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("kopiarepository", req.NamespacedName)
 
-	r.SupporedStorageTypes = []string{"filesystem", "sftp"}
-
-	// Check that the storage type is one of the supported ones
-	// Get all the KopiaRepository objects
-	// For each KopiaRepository object, check if the storage type is supported
-	// If the storage type is not supported, log an error and return
-	// If the storage type is supported, continue with the reconciliation
-
-	kopiaRepos := &backupv1alpha1.KopiaRepositoryList{}
-	if err := r.List(ctx, kopiaRepos); err != nil {
+	// Fetch the KopiaRepository instance
+	repo := &backupv1alpha1.KopiaRepository{}
+	if err := r.Get(ctx, req.NamespacedName, repo); err != nil {
+		if errors.IsNotFound(err) {
+			// Repository deleted
+			return ctrl.Result{}, nil
+		}
+		log.Error(err, "unable to fetch KopiaRepository")
 		return ctrl.Result{}, err
 	}
 
-	// Check each repository for correctnes in configuration
-	for _, repo := range kopiaRepos.Items {
+	r.SupporedStorageTypes = []string{"filesystem", "sftp"}
 
-		// Check if Spec.StorageType is supported
-		if !slices.Contains(r.SupporedStorageTypes, repo.Spec.StorageType) {
-			log.Info("unsupported storage type", "storageType", repo.Spec.StorageType, repo.Name)
-			return ctrl.Result{}, nil
+	// Check if Spec.StorageType is supported
+	if !slices.Contains(r.SupporedStorageTypes, repo.Spec.StorageType) {
+		log.Info("unsupported storage type", "storageType", repo.Spec.StorageType)
+		r.updateCondition(ctx, repo, "Ready", metav1.ConditionFalse,
+			"UnsupportedStorage",
+			fmt.Sprintf("Storage type %s is not supported", repo.Spec.StorageType))
+		return ctrl.Result{}, nil
+	}
+
+	// Check if password is configured
+	if repo.Spec.RepositoryPasswordExistingSecret == "" && repo.Spec.RepositoryPassword == "" {
+		log.Info("Either Spec.RepositoryPasswordExistingSecret or Spec.RepositoryPassword must be set")
+		r.updateCondition(ctx, repo, "Ready", metav1.ConditionFalse,
+			"MissingPassword",
+			"Repository password not configured")
+		return ctrl.Result{}, nil
+	}
+
+	// Check if server mode is enabled
+	if repo.Spec.Server.Enabled {
+		log.Info("Server mode enabled, deploying Kopia Server")
+
+		// Create server manager
+		serverManager := NewKopiaServerManager(r.Client, r.Scheme, log)
+
+		// Ensure server deployment
+		deployment, err := serverManager.EnsureServerDeployment(ctx, repo)
+		if err != nil {
+			log.Error(err, "failed to ensure server deployment")
+			r.updateCondition(ctx, repo, "ServerReady", metav1.ConditionFalse,
+				"DeploymentFailed",
+				fmt.Sprintf("Failed to create/update deployment: %v", err))
+			return ctrl.Result{}, err
 		}
 
-		// Check if Spec.RepositoryPasswordExistingSecret or Spec.RepositoryPassword is set
-		if repo.Spec.RepositoryPasswordExistingSecret == "" && repo.Spec.RepositoryPassword == "" {
-			log.Info("Either Spec.RepositoryPasswordExistingSecret or Spec.RepositoryPassword must be set", repo.Name)
-			return ctrl.Result{}, nil
+		// Ensure server service
+		service, err := serverManager.EnsureServerService(ctx, repo)
+		if err != nil {
+			log.Error(err, "failed to ensure server service")
+			r.updateCondition(ctx, repo, "ServerReady", metav1.ConditionFalse,
+				"ServiceFailed",
+				fmt.Sprintf("Failed to create/update service: %v", err))
+			return ctrl.Result{}, err
+		}
+
+		// Check if server is ready
+		ready, err := serverManager.IsServerReady(ctx, repo)
+		if err != nil {
+			log.Error(err, "failed to check server readiness")
+			return ctrl.Result{RequeueAfter: 10 * 1000000000}, nil // 10 seconds
+		}
+
+		// Update status
+		repo.Status.ServerReady = ready
+		repo.Status.ServerDeployment = deployment.Name
+		repo.Status.ServerService = service.Name
+		repo.Status.ServerURL = serverManager.GetServerURL(ctx, repo, service)
+
+		if ready {
+			log.Info("Kopia Server is ready", "url", repo.Status.ServerURL)
+			r.updateCondition(ctx, repo, "ServerReady", metav1.ConditionTrue,
+				"ServerRunning",
+				"Kopia Server is running and ready")
+			r.updateCondition(ctx, repo, "Ready", metav1.ConditionTrue,
+				"RepositoryReady",
+				"Repository is ready in server mode")
+		} else {
+			log.Info("Waiting for Kopia Server to be ready")
+			r.updateCondition(ctx, repo, "ServerReady", metav1.ConditionFalse,
+				"ServerStarting",
+				"Kopia Server is starting")
+			// Requeue to check again
+			return ctrl.Result{RequeueAfter: 10 * 1000000000}, nil // 10 seconds
+		}
+
+		// Update status
+		if err := r.Status().Update(ctx, repo); err != nil {
+			log.Error(err, "failed to update repository status")
+			return ctrl.Result{}, err
+		}
+	} else {
+		log.Info("Server mode disabled, using direct storage access")
+		r.updateCondition(ctx, repo, "Ready", metav1.ConditionTrue,
+			"DirectAccess",
+			"Repository configured for direct storage access")
+
+		// Update status
+		repo.Status.ServerReady = false
+		repo.Status.ServerDeployment = ""
+		repo.Status.ServerService = ""
+		repo.Status.ServerURL = ""
+
+		if err := r.Status().Update(ctx, repo); err != nil {
+			log.Error(err, "failed to update repository status")
+			return ctrl.Result{}, err
 		}
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// updateCondition updates a condition in the repository status
+func (r *KopiaRepositoryReconciler) updateCondition(
+	ctx context.Context,
+	repo *backupv1alpha1.KopiaRepository,
+	conditionType string,
+	status metav1.ConditionStatus,
+	reason string,
+	message string,
+) {
+	condition := metav1.Condition{
+		Type:               conditionType,
+		Status:             status,
+		ObservedGeneration: repo.Generation,
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	}
+
+	// Find and update existing condition or append new one
+	found := false
+	for i, c := range repo.Status.Conditions {
+		if c.Type == conditionType {
+			if c.Status != status {
+				repo.Status.Conditions[i] = condition
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		repo.Status.Conditions = append(repo.Status.Conditions, condition)
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.

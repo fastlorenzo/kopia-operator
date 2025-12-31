@@ -17,11 +17,91 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+
+// KopiaServerTLSSpec defines TLS configuration for the Kopia Server
+type KopiaServerTLSSpec struct {
+	// Enable TLS for the server
+	// +kubebuilder:default:=true
+	Enabled bool `json:"enabled"`
+
+	// Name of the secret containing TLS certificate and key
+	// Secret should contain 'tls.crt' and 'tls.key' keys
+	SecretName string `json:"secretName,omitempty"`
+
+	// Auto-generate self-signed certificate if secret not provided
+	// +kubebuilder:default:=true
+	AutoGenerate bool `json:"autoGenerate,omitempty"`
+}
+
+// KopiaServerExposureSpec defines how the Kopia Server should be exposed
+type KopiaServerExposureSpec struct {
+	// Type of exposure: Service only for now
+	// TODO: Add Ingress and HTTPRoute support later
+	// +kubebuilder:validation:Enum=Service;""
+	// +kubebuilder:default:=Service
+	Type string `json:"type,omitempty"`
+
+	// Service configuration
+	// +kubebuilder:default:=ClusterIP
+	ServiceType corev1.ServiceType `json:"serviceType,omitempty"`
+	// +kubebuilder:default:=51515
+	ServicePort int32 `json:"servicePort,omitempty"`
+
+	// TODO: Ingress configuration (commented out for now)
+	// IngressClassName string            `json:"ingressClassName,omitempty"`
+	// Host             string            `json:"host,omitempty"`
+	// Annotations      map[string]string `json:"annotations,omitempty"`
+
+	// TODO: HTTPRoute configuration (commented out for now)
+	// GatewayName      string `json:"gatewayName,omitempty"`
+	// GatewayNamespace string `json:"gatewayNamespace,omitempty"`
+}
+
+// KopiaServerSpec defines the configuration for running Kopia in server mode
+type KopiaServerSpec struct {
+	// Enable Kopia Server mode
+	// When enabled, the operator will deploy a Kopia Server for this repository
+	// and backups will connect through the server instead of directly to storage
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+
+	// Container image for the Kopia Server
+	// +kubebuilder:default:="ghcr.io/fastlorenzo/kopia:latest"
+	Image string `json:"image,omitempty"`
+
+	// Number of server replicas
+	// +kubebuilder:default:=1
+	// +kubebuilder:validation:Minimum=1
+	Replicas int32 `json:"replicas,omitempty"`
+
+	// Resource requirements for the server
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// TLS configuration for the server
+	TLS KopiaServerTLSSpec `json:"tls,omitempty"`
+
+	// Exposure configuration (how to expose the server)
+	Exposure KopiaServerExposureSpec `json:"exposure,omitempty"`
+
+	// Secret containing admin password for server management
+	// The operator uses this to manage users via the Kopia Server API
+	// Secret should contain 'password' key
+	// If not provided, a password will be auto-generated
+	AdminPasswordExistingSecret string `json:"adminPasswordExistingSecret,omitempty"`
+
+	// PersistentVolumeClaim for server internal state
+	// If not provided, server will use emptyDir (data lost on restart)
+	PersistentVolumeClaim string `json:"persistentVolumeClaim,omitempty"`
+
+	// Additional command-line arguments for kopia server start
+	ExtraArgs []string `json:"extraArgs,omitempty"`
+}
 
 type KopiaRepositoryStorageConfigSpec struct {
 	Path string `json:"path"`
@@ -110,12 +190,31 @@ type KopiaRepositorySpec struct {
 	FileSystemOptions KopiaRepositoryStorageFileSystemSpec `json:"fileSystemOptions,omitempty"`
 
 	SFTPOptions KopiaRepositoryStorageSFTPSpec `json:"sftpOptions,omitempty"`
+
+	// Server configuration for running Kopia in server mode
+	// When enabled, a centralized Kopia Server will be deployed
+	Server KopiaServerSpec `json:"server,omitempty"`
 }
 
 // KopiaRepositoryStatus defines the observed state of KopiaRepository
 type KopiaRepositoryStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+
+	// Server status (when server mode is enabled)
+	ServerReady bool `json:"serverReady,omitempty"`
+
+	// URL to connect to the Kopia Server
+	ServerURL string `json:"serverURL,omitempty"`
+
+	// Deployment name of the Kopia Server
+	ServerDeployment string `json:"serverDeployment,omitempty"`
+
+	// Service name for the Kopia Server
+	ServerService string `json:"serverService,omitempty"`
+
+	// Conditions represent the latest available observations of the repository's state
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 //+kubebuilder:object:root=true

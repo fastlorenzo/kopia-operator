@@ -570,7 +570,8 @@ func constructCronJob(
 		},
 	}
 
-	if repo.Spec.StorageType == "filesystem" {
+	switch repo.Spec.StorageType {
+	case "filesystem":
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      "repo",
 			MountPath: repo.Spec.FileSystemOptions.Path,
@@ -599,7 +600,7 @@ func constructCronJob(
 			},
 		})
 
-	} else if repo.Spec.StorageType == "sftp" {
+	case "sftp":
 		volumes = append(volumes, corev1.Volume{
 			Name: "config",
 			VolumeSource: corev1.VolumeSource{
