@@ -23,7 +23,7 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -65,7 +65,7 @@ func (m *KopiaServerManager) EnsureServerDeployment(
 	}, deployment)
 
 	if err != nil {
-		if !errors.IsNotFound(err) {
+		if !apierrors.IsNotFound(err) {
 			return nil, err
 		}
 		// Create new deployment
@@ -105,7 +105,7 @@ func (m *KopiaServerManager) EnsureServerService(
 	}, service)
 
 	if err != nil {
-		if !errors.IsNotFound(err) {
+		if !apierrors.IsNotFound(err) {
 			return nil, err
 		}
 		// Create new service
@@ -212,6 +212,16 @@ func (m *KopiaServerManager) constructServerDeployment(
 				SecretKeyRef: m.getRepositoryPasswordSecretKeyRef(repo),
 			},
 		},
+		{
+			Name:  "KOPIA_SERVER_USERNAME",
+			Value: fmt.Sprintf("%s@%s", repo.Spec.Username, repo.Spec.Hostname),
+		},
+		{
+			Name: "KOPIA_SERVER_PASSWORD",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: m.getServerAdminPasswordSecretKeyRef(repo),
+			},
+		},
 	}
 
 	// Build volume mounts
@@ -227,10 +237,18 @@ func (m *KopiaServerManager) constructServerDeployment(
 	}
 
 	// Add storage volume mount based on storage type
-	if repo.Spec.StorageType == "filesystem" {
+	switch repo.Spec.StorageType {
+	case storageTypeFilesystem:
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      "repository",
 			MountPath: "/repository",
+		})
+	case storageTypeSFTP:
+		// Mount SFTP credentials secret
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "sftp-credentials",
+			MountPath: "/sftp-creds",
+			ReadOnly:  true,
 		})
 	}
 
@@ -251,8 +269,20 @@ func (m *KopiaServerManager) constructServerDeployment(
 	}
 
 	// Add storage volume based on storage type
-	if repo.Spec.StorageType == "filesystem" {
+	switch repo.Spec.StorageType {
+	case storageTypeFilesystem:
 		volumes = append(volumes, m.constructStorageVolume(repo))
+	case storageTypeSFTP:
+		// Add SFTP credentials secret volume
+		volumes = append(volumes, corev1.Volume{
+			Name: "sftp-credentials",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  repo.Spec.SFTPOptions.CredentialsSecret,
+					DefaultMode: func(i int32) *int32 { return &i }(0600),
+				},
+			},
+		})
 	}
 
 	// Build server command
@@ -422,18 +452,80 @@ func (m *KopiaServerManager) constructServerCommand(repo *backupv1alpha1.KopiaRe
 	// Build repository connection string based on storage type
 	var repoConnect string
 	switch repo.Spec.StorageType {
-	case "filesystem":
+	case storageTypeFilesystem:
 		repoConnect = fmt.Sprintf("kopia repository connect filesystem --path=/repository --override-hostname=%s --override-username=%s",
 			repo.Spec.Hostname, repo.Spec.Username)
-	case "sftp":
-		// TODO: Add SFTP support
-		repoConnect = "echo 'SFTP not yet supported in server mode' && exit 1"
+	case storageTypeSFTP:
+		// Build SFTP connection command using direct configuration
+		port := 22
+		if repo.Spec.SFTPOptions.Port > 0 {
+			port = repo.Spec.SFTPOptions.Port
+		}
+
+		sftpCmd := fmt.Sprintf("kopia repository connect sftp --host=%s --port=%d --path=%s",
+			repo.Spec.SFTPOptions.Host,
+			port,
+			repo.Spec.SFTPOptions.Path)
+
+		// Read credentials from mounted secret
+		repoConnect = fmt.Sprintf(`
+# Read SFTP credentials from secret
+SFTP_USER=$(cat /sftp-creds/username 2>/dev/null || echo "")
+SFTP_PASSWORD=$(cat /sftp-creds/password 2>/dev/null || echo "")
+SFTP_KEY=$(cat /sftp-creds/keyData 2>/dev/null || echo "")
+
+if [ -z "$SFTP_USER" ]; then
+  echo "ERROR: SFTP username not found in secret"
+  exit 1
+fi
+
+# Build connection command with credentials
+SFTP_CMD="%s --username=$SFTP_USER"
+
+# Use SSH key if provided, otherwise use password
+if [ -n "$SFTP_KEY" ]; then
+  echo "$SFTP_KEY" > /tmp/ssh_key
+  chmod 600 /tmp/ssh_key
+  SFTP_CMD="$SFTP_CMD --keyfile=/tmp/ssh_key"
+elif [ -n "$SFTP_PASSWORD" ]; then
+  SFTP_CMD="$SFTP_CMD --sftp-password=$SFTP_PASSWORD"
+else
+  echo "ERROR: Neither keyData nor password found in secret"
+  exit 1
+fi
+`, sftpCmd)
+
+		// Add known_hosts if provided
+		if repo.Spec.SFTPOptions.KnownHostsData != "" {
+			repoConnect += `
+# Add known_hosts
+echo "` + repo.Spec.SFTPOptions.KnownHostsData + `" > /tmp/known_hosts
+SFTP_CMD="$SFTP_CMD --known-hosts=/tmp/known_hosts"
+`
+		}
+
+		// Add external SSH options if configured
+		if repo.Spec.SFTPOptions.ExternalSSH {
+			sshCmd := "ssh"
+			if repo.Spec.SFTPOptions.SSHCommand != "" {
+				sshCmd = repo.Spec.SFTPOptions.SSHCommand
+			}
+			repoConnect += fmt.Sprintf(`
+SFTP_CMD="$SFTP_CMD --external-ssh --ssh-command=%s"
+`, sshCmd)
+		}
+
+		// Add override flags and execute
+		repoConnect += fmt.Sprintf(`
+SFTP_CMD="$SFTP_CMD --override-hostname=%s --override-username=%s"
+eval "$SFTP_CMD"
+`, repo.Spec.Hostname, repo.Spec.Username)
 	default:
 		repoConnect = fmt.Sprintf("echo 'Unsupported storage type: %s' && exit 1", repo.Spec.StorageType)
 	}
 
 	// Server start command
-	serverStart := "kopia server start --insecure --address=0.0.0.0:51515 --server-control-username=admin --server-control-password=\"${KOPIA_PASSWORD}\""
+	serverStart := "kopia server start --insecure --address=0.0.0.0:51515 --server-control-username=admin --server-control-password=\"${KOPIA_SERVER_PASSWORD}\""
 
 	// Add extra args if specified
 	if len(repo.Spec.Server.ExtraArgs) > 0 {
@@ -443,18 +535,235 @@ func (m *KopiaServerManager) constructServerCommand(repo *backupv1alpha1.KopiaRe
 	}
 
 	// Full command with repository connection and server start
-	cmd := fmt.Sprintf(`
+	var cmd string
+
+	// Admin user setup
+	adminUserSetup := fmt.Sprintf(`
+# Set up admin user
+ADMIN_USER="%s@%s"
+echo "Checking admin user: $ADMIN_USER"
+kopia server user list | grep "$ADMIN_USER" >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+  echo "Creating admin user: $ADMIN_USER"
+  kopia server user add "$ADMIN_USER" --user-password="${KOPIA_PASSWORD}"
+else
+  echo "Updating admin user password: $ADMIN_USER"
+  kopia server user set "$ADMIN_USER" --user-password="${KOPIA_PASSWORD}"
+fi
+`, repo.Spec.Username, repo.Spec.Hostname)
+
+	switch repo.Spec.StorageType {
+	case storageTypeFilesystem:
+		cmd = fmt.Sprintf(`
 set -e
 echo "Connecting to repository..."
 %s || {
   echo "Repository connection failed, attempting to create..."
   kopia repository create filesystem --path=/repository --override-hostname=%s --override-username=%s
 }
+echo "Setting up admin user..."
+%s
 echo "Starting Kopia Server..."
 %s
-`, repoConnect, repo.Spec.Hostname, repo.Spec.Username, serverStart)
+`, repoConnect, repo.Spec.Hostname, repo.Spec.Username, adminUserSetup, serverStart)
+	case storageTypeSFTP:
+		// For SFTP, support auto-creation
+		port := 22
+		if repo.Spec.SFTPOptions.Port > 0 {
+			port = repo.Spec.SFTPOptions.Port
+		}
+
+		sftpCreateCmd := fmt.Sprintf("kopia repository create sftp --host=%s --port=%d --path=%s",
+			repo.Spec.SFTPOptions.Host,
+			port,
+			repo.Spec.SFTPOptions.Path)
+
+		createCmd := fmt.Sprintf(`# Build SFTP create command with credentials
+SFTP_CREATE_CMD="%s --username=$SFTP_USER"
+
+# Use SSH key if provided, otherwise use password
+if [ -n "$SFTP_KEY" ]; then
+  SFTP_CREATE_CMD="$SFTP_CREATE_CMD --keyfile=/tmp/ssh_key"
+elif [ -n "$SFTP_PASSWORD" ]; then
+  SFTP_CREATE_CMD="$SFTP_CREATE_CMD --sftp-password=$SFTP_PASSWORD"
+fi
+`, sftpCreateCmd)
+
+		// Add known_hosts to create command if provided
+		if repo.Spec.SFTPOptions.KnownHostsData != "" {
+			createCmd += `SFTP_CREATE_CMD="$SFTP_CREATE_CMD --known-hosts=/tmp/known_hosts"
+`
+		}
+
+		// Add external SSH options if configured
+		if repo.Spec.SFTPOptions.ExternalSSH {
+			sshCmd := "ssh"
+			if repo.Spec.SFTPOptions.SSHCommand != "" {
+				sshCmd = repo.Spec.SFTPOptions.SSHCommand
+			}
+			createCmd += fmt.Sprintf(`SFTP_CREATE_CMD="$SFTP_CREATE_CMD --external-ssh --ssh-command=%s"
+`, sshCmd)
+		}
+
+		// Add override flags to create command
+		createCmd += fmt.Sprintf(`SFTP_CREATE_CMD="$SFTP_CREATE_CMD --override-hostname=%s --override-username=%s"
+`, repo.Spec.Hostname, repo.Spec.Username)
+
+		cmd = fmt.Sprintf(`
+echo "Connecting to repository..."
+%s
+if [ $? -ne 0 ]; then
+  echo "Repository connection failed, attempting to create..."
+%s  eval "$SFTP_CREATE_CMD"
+  if [ $? -eq 0 ]; then
+    echo "Repository created successfully, reconnecting..."
+    eval "$SFTP_CMD"
+  else
+    echo "Failed to create repository"
+    exit 1
+  fi
+fi
+set -e
+echo "Starting Kopia Server..."
+%s
+%s
+`, repoConnect, createCmd, adminUserSetup, serverStart)
+	default:
+		// For other storage types, don't auto-create - repository must exist
+		cmd = fmt.Sprintf(`
+set -e
+echo "Connecting to repository..."
+%s
+echo "Starting Kopia Server..."
+%s
+%s
+`, repoConnect, adminUserSetup, serverStart)
+	}
 
 	return cmd
+}
+
+// EnsureRepositoryPasswordSecret creates or updates the repository password secret
+// Only creates a secret if RepositoryPassword is set in the spec
+func (m *KopiaServerManager) EnsureRepositoryPasswordSecret(
+	ctx context.Context,
+	repo *backupv1alpha1.KopiaRepository,
+) error {
+	// Skip if using existing secret
+	if repo.Spec.RepositoryPasswordExistingSecret != "" {
+		return nil
+	}
+
+	// Skip if no password is set
+	if repo.Spec.RepositoryPassword == "" {
+		return fmt.Errorf("repository password must be set either via repositoryPassword or repositoryPasswordExistingSecret")
+	}
+
+	secretName := fmt.Sprintf("kopia-repo-%s", repo.Name)
+	secret := &corev1.Secret{}
+	err := m.Client.Get(ctx, types.NamespacedName{
+		Name:      secretName,
+		Namespace: repo.Namespace,
+	}, secret)
+
+	desiredSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: repo.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "kopia-repository",
+				"app.kubernetes.io/instance":   repo.Name,
+				"app.kubernetes.io/managed-by": "kopia-operator",
+			},
+		},
+		StringData: map[string]string{
+			"password":       repo.Spec.RepositoryPassword,
+			"KOPIA_PASSWORD": repo.Spec.RepositoryPassword,
+		},
+	}
+
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		// Create new secret
+		if err := ctrl.SetControllerReference(repo, desiredSecret, m.Scheme); err != nil {
+			return err
+		}
+		m.Log.Info("Creating repository password Secret", "name", secretName)
+		if err := m.Client.Create(ctx, desiredSecret); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Update existing secret if password changed
+	secret.StringData = desiredSecret.StringData
+	m.Log.Info("Updating repository password Secret", "name", secretName)
+	if err := m.Client.Update(ctx, secret); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// EnsureServerAdminPasswordSecret creates a secret for the server admin password if ServerAdminPassword is set
+func (m *KopiaServerManager) EnsureServerAdminPasswordSecret(ctx context.Context, repo *backupv1alpha1.KopiaRepository) error {
+	// Only create secret if ServerAdminPassword is set and no existing secret is specified
+	if repo.Spec.Server.ServerAdminPassword == "" || repo.Spec.Server.ServerAdminPasswordExistingSecret != "" {
+		return nil
+	}
+
+	secretName := fmt.Sprintf("kopia-server-admin-%s", repo.Name)
+
+	// Check if secret already exists
+	secret := &corev1.Secret{}
+	err := m.Client.Get(ctx, types.NamespacedName{
+		Name:      secretName,
+		Namespace: repo.Namespace,
+	}, secret)
+
+	desiredSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: repo.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "kopia-server-admin",
+				"app.kubernetes.io/instance":   repo.Name,
+				"app.kubernetes.io/managed-by": "kopia-operator",
+			},
+		},
+		StringData: map[string]string{
+			"password": repo.Spec.Server.ServerAdminPassword,
+		},
+	}
+
+	// Set owner reference
+	if err := ctrl.SetControllerReference(repo, desiredSecret, m.Scheme); err != nil {
+		return err
+	}
+
+	// If secret doesn't exist, create it
+	if apierrors.IsNotFound(err) {
+		m.Log.Info("Creating server admin password Secret", "name", secretName)
+		if err := m.Client.Create(ctx, desiredSecret); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// Update existing secret if password changed
+	secret.StringData = desiredSecret.StringData
+	m.Log.Info("Updating server admin password Secret", "name", secretName)
+	if err := m.Client.Update(ctx, secret); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // getRepositoryPasswordSecretKeyRef returns the secret key reference for the repository password
@@ -468,11 +777,38 @@ func (m *KopiaServerManager) getRepositoryPasswordSecretKeyRef(repo *backupv1alp
 		}
 	}
 
-	// Use default secret name
+	// Use default secret name (created by EnsureRepositoryPasswordSecret)
 	return &corev1.SecretKeySelector{
 		LocalObjectReference: corev1.LocalObjectReference{
 			Name: fmt.Sprintf("kopia-repo-%s", repo.Name),
 		},
 		Key: "password",
 	}
+}
+
+// getServerAdminPasswordSecretKeyRef returns the secret key reference for the server admin password
+func (m *KopiaServerManager) getServerAdminPasswordSecretKeyRef(repo *backupv1alpha1.KopiaRepository) *corev1.SecretKeySelector {
+	// If existing secret specified, use it
+	if repo.Spec.Server.ServerAdminPasswordExistingSecret != "" {
+		return &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{
+				Name: repo.Spec.Server.ServerAdminPasswordExistingSecret,
+			},
+			Key: "password",
+		}
+	}
+
+	// If server admin password is set, use the same secret as repository password
+	// (EnsureServerAdminPasswordSecret will create it separately if needed)
+	if repo.Spec.Server.ServerAdminPassword != "" {
+		return &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{
+				Name: fmt.Sprintf("kopia-server-admin-%s", repo.Name),
+			},
+			Key: "password",
+		}
+	}
+
+	// Fall back to repository password
+	return m.getRepositoryPasswordSecretKeyRef(repo)
 }

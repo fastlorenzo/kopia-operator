@@ -6,4 +6,36 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: kopiarepository-sample
 spec:
-  # TODO(user): Add fields here
+  hostname: kopia-server
+  username: kopia
+  storageType: filesystem
+  repositoryPassword: "your-repository-password-here"
+  defaultSchedule: "0 2 * * *"
+
+  # Filesystem storage configuration
+  pvcName: kopia-pvc
+  mountPath: /data
+
+  # Optional: Enable server mode
+  server:
+    enabled: true
+    image: "ghcr.io/fastlorenzo/kopia:latest"
+    replicas: 1
+
+    # Server admin password (for server API control)
+    # This is separate from repositoryPassword (which encrypts data)
+    serverAdminPassword: "your-server-admin-password-here"
+    # Or use an existing secret:
+    # serverAdminPasswordExistingSecret: "kopia-server-admin-secret"
+
+    exposure:
+      type: Service
+      serviceType: ClusterIP
+      servicePort: 51515
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "1000m"

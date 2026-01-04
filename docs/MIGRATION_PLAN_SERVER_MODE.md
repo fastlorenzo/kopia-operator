@@ -23,8 +23,8 @@ This document outlines the plan to migrate the kopia-operator from a **direct st
 │  │ - Connects directly to backend storage                   │  │
 │  │ - Creates snapshots                                      │  │
 │  └──────────────────────────────────────────────────────────┘  │
-│                           │                                     │
-│                           ▼                                     │
+│                           │                                    │
+│                           ▼                                    │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │         NFS Server / SFTP Server                         │  │
 │  │         (Direct Storage Backend)                         │  │
@@ -51,8 +51,8 @@ This document outlines the plan to migrate the kopia-operator from a **direct st
 │  │ - Connects to Kopia Server via HTTPS                     │  │
 │  │ - Creates snapshots via API                              │  │
 │  └──────────────────────────────────────────────────────────┘  │
-│                           │                                     │
-│                           ▼                                     │
+│                           │                                    │
+│                           ▼                                    │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │         Kopia Server (per KopiaRepository)               │  │
 │  │  ┌────────────────────────────────────────────────────┐  │  │
@@ -63,8 +63,8 @@ This document outlines the plan to migrate the kopia-operator from a **direct st
 │  │  │ - TLS termination                                  │  │  │
 │  │  └────────────────────────────────────────────────────┘  │  │
 │  └──────────────────────────────────────────────────────────┘  │
-│                           │                                     │
-│                           ▼                                     │
+│                           │                                    │
+│                           ▼                                    │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │         NFS Server / SFTP Server                         │  │
 │  │         (Only accessible by Kopia Server)                │  │

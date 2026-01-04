@@ -1,9 +1,56 @@
 apiVersion: backup.cloudinfra.be/v1alpha1
-kind: KopiaSFTPRepository
+kind: KopiaRepository
 metadata:
   labels:
     app.kubernetes.io/name: kopia-operator
     app.kubernetes.io/managed-by: kustomize
-  name: kopiasftprepository-sample
+  name: sftprepo
+  namespace: default
 spec:
-  # TODO(user): Add fields here
+  hostname: kopia-server
+  username: kopia
+  storageType: sftp
+  repositoryPassword: "your-repository-password-here"
+  defaultSchedule: "0 2 * * *"
+
+  # SFTP configuration
+  sftpOptions:
+    # SFTP server connection details
+    host: "sftp.example.com"
+    port: 22
+    path: "/backups/kopia-repo"
+
+    # Secret containing SFTP credentials
+    # Required keys: username, and either password or keyData (SSH private key)
+    credentialsSecret: kopia-sftp-credentials
+
+    # Optional: SSH known_hosts data for host key verification
+    # knownHostsData: "sftp.example.com ssh-rsa AAAAB3NzaC1yc2EAAAABI..."
+
+    # Optional: Use external SSH command
+    # externalSSH: false
+    # sshCommand: "ssh"
+
+  # Optional: Enable server mode
+  server:
+    enabled: true
+    image: "ghcr.io/fastlorenzo/kopia:latest"
+    replicas: 1
+
+    # Server admin password (for server API control)
+    # This is separate from repositoryPassword (which encrypts data)
+    serverAdminPassword: "your-server-admin-password-here"
+    # Or use an existing secret:
+    # serverAdminPasswordExistingSecret: "kopia-server-admin-secret"
+
+    exposure:
+      type: Service
+      serviceType: ClusterIP
+      servicePort: 51515
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "1000m"

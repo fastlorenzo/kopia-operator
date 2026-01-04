@@ -44,10 +44,6 @@ import (
 	"github.com/go-logr/logr"
 )
 
-const (
-	pvcNameField = ".spec.pvcName"
-)
-
 // KopiaBackupReconciler reconciles a KopiaBackup object
 type KopiaBackupReconciler struct {
 	client.Client
@@ -149,10 +145,15 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, repositoryErr
 	}
 
+	if repository == nil {
+		log.Error(nil, "KopiaRepository is nil", "repositoryName", kBackup.Spec.Repository)
+		return ctrl.Result{}, fmt.Errorf("KopiaRepository '%s' not found", kBackup.Spec.Repository)
+	}
+
 	log.Info("Found KopiaRepository", "repositoryName", repository.Name)
 
 	// Check if the repository configmap exists (only if backup type is filesystem)
-	if repository.Spec.StorageType == "filesystem" {
+	if repository.Spec.StorageType == storageTypeFilesystem {
 		configMap := &corev1.ConfigMap{}
 		configMapName := fmt.Sprintf("kopia-config-%s", repository.Name)
 		configMapRetrievalError := r.Get(ctx,
@@ -571,7 +572,7 @@ func constructCronJob(
 	}
 
 	switch repo.Spec.StorageType {
-	case "filesystem":
+	case storageTypeFilesystem:
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      "repo",
 			MountPath: repo.Spec.FileSystemOptions.Path,
@@ -600,17 +601,25 @@ func constructCronJob(
 			},
 		})
 
-	case "sftp":
-		volumes = append(volumes, corev1.Volume{
-			Name: "config",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: repo.Spec.SFTPOptions.ConfigMapName,
+	case storageTypeSFTP:
+		volumes = append(volumes,
+			// SFTP credentials from secret
+			corev1.Volume{
+				Name: "sftp-credentials",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName:  repo.Spec.SFTPOptions.CredentialsSecret,
+						DefaultMode: func(i int32) *int32 { return &i }(0600),
 					},
 				},
 			},
-		},
+			// Config volume for repository.config
+			corev1.Volume{
+				Name: "config",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
 			// emptyDir for kopia cache
 			corev1.Volume{
 				Name: "kopia-cache",
@@ -622,10 +631,17 @@ func constructCronJob(
 			},
 		)
 
-		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      "kopia-cache",
-			MountPath: kopiaCacheDirectory,
-		})
+		volumeMounts = append(volumeMounts,
+			corev1.VolumeMount{
+				Name:      "sftp-credentials",
+				MountPath: "/sftp-creds",
+				ReadOnly:  true,
+			},
+			corev1.VolumeMount{
+				Name:      "kopia-cache",
+				MountPath: kopiaCacheDirectory,
+			},
+		)
 	}
 
 	if repo.Spec.RepositoryPasswordExistingSecret != "" {
@@ -811,7 +827,7 @@ func getKopiaRepositoryByName(
 		var allRepositories backupv1alpha1.KopiaRepositoryList
 		if err := c.List(ctx, &allRepositories); err != nil {
 			log.Error(err, "Error listing KopiaRepositories")
-			return nil, nil
+			return nil, err
 		}
 
 		log.Info("found KopiaRepositories", "KopiaRepositoriesCount", len(allRepositories.Items))
@@ -831,7 +847,7 @@ func getKopiaRepositoryByName(
 		// }
 		if len(matchingRepositories) == 0 {
 			log.Info("KopiaRepository not found in all namespaces", "repositoryName", repositoryName)
-			return nil, nil
+			return nil, fmt.Errorf("KopiaRepository '%s' not found", repositoryName)
 		}
 		if len(matchingRepositories) > 1 {
 			log.Error(nil, "multiple KopiaRepositories with the same name found in multiple namespaces", "repositoryName", repositoryName)

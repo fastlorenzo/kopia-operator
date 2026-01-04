@@ -12,6 +12,7 @@ Phase 2 implementation is underway. Core server management components have been 
 ### ✅ 1. Simplified API (Ingress/HTTPRoute Deferred)
 
 Commented out Ingress and HTTPRoute support to focus on core Service-based exposure:
+
 - Updated `KopiaServerExposureSpec` to only support Service type
 - Enum validation: `Service` or empty string only
 - Ingress and HTTPRoute fields commented out for future implementation
@@ -21,6 +22,7 @@ Commented out Ingress and HTTPRoute support to focus on core Service-based expos
 **File:** `internal/controller/backup/kopiaserver_manager.go` (500+ lines)
 
 **Key Functions Implemented:**
+
 - ✅ `NewKopiaServerManager()` - Factory function
 - ✅ `EnsureServerDeployment()` - Creates/updates Deployment
 - ✅ `EnsureServerService()` - Creates/updates Service
@@ -28,6 +30,7 @@ Commented out Ingress and HTTPRoute support to focus on core Service-based expos
 - ✅ `IsServerReady()` - Checks deployment readiness
 
 **Helper Functions:**
+
 - ✅ `constructServerDeployment()` - Builds Deployment spec with proper labels, volumes, resources
 - ✅ `constructServerService()` - Builds Service spec
 - ✅ `constructStorageVolume()` - Creates NFS or HostPath volume
@@ -35,6 +38,7 @@ Commented out Ingress and HTTPRoute support to focus on core Service-based expos
 - ✅ `getRepositoryPasswordSecretKeyRef()` - Gets password from secret
 
 **Features:**
+
 - Server runs with `kopia repository connect` or `create` on startup
 - HTTP API on port 51515 (default, configurable)
 - Liveness and readiness probes configured
@@ -48,6 +52,7 @@ Commented out Ingress and HTTPRoute support to focus on core Service-based expos
 **File:** `internal/controller/backup/kopiauser_manager.go` (200+ lines)
 
 **Key Functions Implemented:**
+
 - ✅ `NewKopiaUserManager()` - Factory function
 - ✅ `EnsureUser()` - Creates credentials secret for backup
 - ✅ `DeleteUser()` - Removes credentials when backup deleted
@@ -55,6 +60,7 @@ Commented out Ingress and HTTPRoute support to focus on core Service-based expos
 - ✅ `generateSecurePassword()` - Cryptographically secure password generation
 
 **Features:**
+
 - Username format: `<namespace>-<pvcname>`
 - 32-character secure random passwords (base64 encoded)
 - Credentials stored in Kubernetes Secrets
@@ -67,6 +73,7 @@ Commented out Ingress and HTTPRoute support to focus on core Service-based expos
 **File:** `internal/controller/backup/kopiarepository_controller.go`
 
 **New Functionality:**
+
 - ✅ Detects when `spec.server.enabled == true`
 - ✅ Creates KopiaServerManager instance
 - ✅ Ensures server Deployment exists and is updated
@@ -82,6 +89,7 @@ Commented out Ingress and HTTPRoute support to focus on core Service-based expos
 - ✅ Handles direct storage mode when server disabled
 
 **Status Conditions Added:**
+
 - `Ready` - Overall repository readiness
 - `ServerReady` - Server deployment status
 - Includes reason and message for each condition
@@ -91,6 +99,7 @@ Commented out Ingress and HTTPRoute support to focus on core Service-based expos
 **File:** `config/rbac/role.yaml` (auto-generated)
 
 New permissions added automatically via kubebuilder markers:
+
 - ✅ `apps/deployments` - Full CRUD permissions
 - ✅ `core/services` - Full CRUD permissions
 - ✅ `core/secrets` - Full CRUD permissions
@@ -137,7 +146,7 @@ spec:
         memory: "1Gi"
         cpu: "1000m"
     tls:
-      enabled: false  # Using HTTP for now
+      enabled: false # Using HTTP for now
     exposure:
       type: Service
       serviceType: ClusterIP
@@ -145,6 +154,7 @@ spec:
 ```
 
 **Result:**
+
 - Deployment created: `kopia-server-prod-repo`
 - Service created: `kopia-server-prod-repo`
 - Server URL: `http://kopia-server-prod-repo.backup-system.svc.cluster.local:51515`
@@ -159,14 +169,14 @@ status:
   serverDeployment: "kopia-server-prod-repo"
   serverService: "kopia-server-prod-repo"
   conditions:
-  - type: ServerReady
-    status: "True"
-    reason: ServerRunning
-    message: "Kopia Server is running and ready"
-  - type: Ready
-    status: "True"
-    reason: RepositoryReady
-    message: "Repository is ready in server mode"
+    - type: ServerReady
+      status: "True"
+      reason: ServerRunning
+      message: "Kopia Server is running and ready"
+    - type: Ready
+      status: "True"
+      reason: RepositoryReady
+      message: "Repository is ready in server mode"
 ```
 
 ## Architecture
@@ -225,6 +235,7 @@ kopia server start \
 ### 🔲 Update KopiaBackupReconciler
 
 **Tasks:**
+
 1. Detect if referenced repository has server enabled
 2. Call KopiaUserManager.EnsureUser() to create credentials
 3. Update CronJob command to use server connection instead of direct storage
@@ -232,17 +243,20 @@ kopia server start \
 5. Handle cleanup (call DeleteUser on backup deletion)
 
 **Files to Modify:**
+
 - `internal/controller/backup/kopiabackup_controller.go`
 
 ### 🔲 Server Connection in Backup Pods
 
 **Current (Direct Mode):**
+
 ```bash
 kopia repository connect filesystem --path=/data/repo
 kopia snapshot create /data/pvc
 ```
 
 **Target (Server Mode):**
+
 ```bash
 kopia server login \
   --url=$KOPIA_SERVER_URL \
@@ -264,20 +278,24 @@ kopia server logout
 ### 🔲 Future Enhancements (Phase 3+)
 
 1. **Actual Kopia Server API Integration**
+
    - Use Kopia's HTTP API to create/delete users
    - Currently just managing credentials secrets
 
 2. **TLS Support**
+
    - Auto-generate self-signed certificates
    - Support for existing TLS secrets
    - Update probes to use HTTPS
 
 3. **Ingress/HTTPRoute Support**
+
    - Uncomment exposure options
    - Create Ingress resources
    - Support Gateway API HTTPRoute
 
 4. **High Availability**
+
    - Support multiple replicas
    - Shared state via PVC
    - Load balancing considerations
@@ -290,16 +308,19 @@ kopia server logout
 ## Files Modified in Phase 2
 
 ### New Files Created
+
 - ✅ `internal/controller/backup/kopiaserver_manager.go` (500+ lines)
 - ✅ `internal/controller/backup/kopiauser_manager.go` (200+ lines)
 
 ### Modified Files
+
 - ✅ `api/backup/v1alpha1/kopiarepository_types.go` (simplified exposure spec)
 - ✅ `internal/controller/backup/kopiarepository_controller.go` (server mode support)
 - ✅ `config/rbac/role.yaml` (auto-updated with new permissions)
 - ✅ `config/crd/bases/backup.cloudinfra.be_kopiarepositories.yaml` (regenerated)
 
 ### Statistics
+
 ```
 Total lines added: ~850 lines
 New components: 2 managers
@@ -316,6 +337,7 @@ Functions implemented: 15+
 4. Test end-to-end backup flow with server
 
 **Command to continue:**
+
 ```bash
 # Focus on kopiabackup_controller.go next
 vim internal/controller/backup/kopiabackup_controller.go

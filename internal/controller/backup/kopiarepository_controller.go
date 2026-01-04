@@ -62,12 +62,12 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	r.SupporedStorageTypes = []string{"filesystem", "sftp"}
+	r.SupporedStorageTypes = []string{storageTypeFilesystem, storageTypeSFTP}
 
 	// Check if Spec.StorageType is supported
 	if !slices.Contains(r.SupporedStorageTypes, repo.Spec.StorageType) {
 		log.Info("unsupported storage type", "storageType", repo.Spec.StorageType)
-		r.updateCondition(ctx, repo, "Ready", metav1.ConditionFalse,
+		r.updateCondition(repo, "Ready", metav1.ConditionFalse,
 			"UnsupportedStorage",
 			fmt.Sprintf("Storage type %s is not supported", repo.Spec.StorageType))
 		return ctrl.Result{}, nil
@@ -76,7 +76,7 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Check if password is configured
 	if repo.Spec.RepositoryPasswordExistingSecret == "" && repo.Spec.RepositoryPassword == "" {
 		log.Info("Either Spec.RepositoryPasswordExistingSecret or Spec.RepositoryPassword must be set")
-		r.updateCondition(ctx, repo, "Ready", metav1.ConditionFalse,
+		r.updateCondition(repo, "Ready", metav1.ConditionFalse,
 			"MissingPassword",
 			"Repository password not configured")
 		return ctrl.Result{}, nil
@@ -89,11 +89,29 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// Create server manager
 		serverManager := NewKopiaServerManager(r.Client, r.Scheme, log)
 
+		// Ensure repository password secret (if repositoryPassword is set)
+		if err := serverManager.EnsureRepositoryPasswordSecret(ctx, repo); err != nil {
+			log.Error(err, "failed to ensure repository password secret")
+			r.updateCondition(repo, "Ready", metav1.ConditionFalse,
+				"SecretFailed",
+				fmt.Sprintf("Failed to create/update password secret: %v", err))
+			return ctrl.Result{}, err
+		}
+
+		// Ensure server admin password secret (if ServerAdminPassword is set)
+		if err := serverManager.EnsureServerAdminPasswordSecret(ctx, repo); err != nil {
+			log.Error(err, "failed to ensure server admin password secret")
+			r.updateCondition(repo, "Ready", metav1.ConditionFalse,
+				"SecretFailed",
+				fmt.Sprintf("Failed to create/update server admin password secret: %v", err))
+			return ctrl.Result{}, err
+		}
+
 		// Ensure server deployment
 		deployment, err := serverManager.EnsureServerDeployment(ctx, repo)
 		if err != nil {
 			log.Error(err, "failed to ensure server deployment")
-			r.updateCondition(ctx, repo, "ServerReady", metav1.ConditionFalse,
+			r.updateCondition(repo, "ServerReady", metav1.ConditionFalse,
 				"DeploymentFailed",
 				fmt.Sprintf("Failed to create/update deployment: %v", err))
 			return ctrl.Result{}, err
@@ -103,7 +121,7 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		service, err := serverManager.EnsureServerService(ctx, repo)
 		if err != nil {
 			log.Error(err, "failed to ensure server service")
-			r.updateCondition(ctx, repo, "ServerReady", metav1.ConditionFalse,
+			r.updateCondition(repo, "ServerReady", metav1.ConditionFalse,
 				"ServiceFailed",
 				fmt.Sprintf("Failed to create/update service: %v", err))
 			return ctrl.Result{}, err
@@ -124,15 +142,15 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 		if ready {
 			log.Info("Kopia Server is ready", "url", repo.Status.ServerURL)
-			r.updateCondition(ctx, repo, "ServerReady", metav1.ConditionTrue,
+			r.updateCondition(repo, "ServerReady", metav1.ConditionTrue,
 				"ServerRunning",
 				"Kopia Server is running and ready")
-			r.updateCondition(ctx, repo, "Ready", metav1.ConditionTrue,
+			r.updateCondition(repo, "Ready", metav1.ConditionTrue,
 				"RepositoryReady",
 				"Repository is ready in server mode")
 		} else {
 			log.Info("Waiting for Kopia Server to be ready")
-			r.updateCondition(ctx, repo, "ServerReady", metav1.ConditionFalse,
+			r.updateCondition(repo, "ServerReady", metav1.ConditionFalse,
 				"ServerStarting",
 				"Kopia Server is starting")
 			// Requeue to check again
@@ -146,7 +164,7 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	} else {
 		log.Info("Server mode disabled, using direct storage access")
-		r.updateCondition(ctx, repo, "Ready", metav1.ConditionTrue,
+		r.updateCondition(repo, "Ready", metav1.ConditionTrue,
 			"DirectAccess",
 			"Repository configured for direct storage access")
 
@@ -167,7 +185,6 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 // updateCondition updates a condition in the repository status
 func (r *KopiaRepositoryReconciler) updateCondition(
-	ctx context.Context,
 	repo *backupv1alpha1.KopiaRepository,
 	conditionType string,
 	status metav1.ConditionStatus,

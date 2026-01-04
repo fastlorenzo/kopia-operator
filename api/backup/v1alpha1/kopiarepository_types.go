@@ -89,11 +89,14 @@ type KopiaServerSpec struct {
 	// Exposure configuration (how to expose the server)
 	Exposure KopiaServerExposureSpec `json:"exposure,omitempty"`
 
-	// Secret containing admin password for server management
-	// The operator uses this to manage users via the Kopia Server API
-	// Secret should contain 'password' key
-	// If not provided, a password will be auto-generated
-	AdminPasswordExistingSecret string `json:"adminPasswordExistingSecret,omitempty"`
+	// Server admin password for server control and user management
+	// If not provided, will use the repository password
+	ServerAdminPassword string `json:"serverAdminPassword,omitempty"`
+
+	// Secret containing server admin password
+	// Expected key: password
+	// If provided, takes precedence over ServerAdminPassword
+	ServerAdminPasswordExistingSecret string `json:"serverAdminPasswordExistingSecret,omitempty"`
 
 	// PersistentVolumeClaim for server internal state
 	// If not provided, server will use emptyDir (data lost on restart)
@@ -127,9 +130,36 @@ type KopiaRepositoryStorageFileSystemSpec struct {
 	NFSServer string `json:"nfsServer,omitempty"`
 }
 
+// KopiaRepositoryStorageSFTPSpec defines SFTP storage options for Kopia repository
 type KopiaRepositoryStorageSFTPSpec struct {
-	// configMapName is a reference to a ConfigMap containing the SFTP configuration.
-	ConfigMapName string `json:"configMapName,omitempty"`
+	// Path to the repository on the SFTP server
+	Path string `json:"path"`
+
+	// SFTP server hostname
+	Host string `json:"host"`
+
+	// SFTP server port
+	// +kubebuilder:default:=22
+	Port int `json:"port,omitempty"`
+
+	// Known hosts data for SSH host key verification
+	KnownHostsData string `json:"knownHostsData,omitempty"`
+
+	// Use external SSH command instead of built-in SSH
+	// +kubebuilder:default:=false
+	ExternalSSH bool `json:"externalSSH,omitempty"`
+
+	// SSH command to use when ExternalSSH is true
+	// +kubebuilder:default:="ssh"
+	SSHCommand string `json:"sshCommand,omitempty"`
+
+	// Directory shards configuration
+	DirShards []int `json:"dirShards,omitempty"`
+
+	// Secret containing SFTP credentials
+	// Expected keys: username, password (optional), keyData (optional - SSH private key)
+	// At least one of password or keyData must be provided
+	CredentialsSecret string `json:"credentialsSecret"`
 }
 
 // KopiaRepositoryCachingSpec defines the desired state of KopiaRepositoryCaching
@@ -173,6 +203,7 @@ type KopiaRepositorySpec struct {
 	EnableActions bool `json:"enableActions"`
 
 	// Cronjob for default schedule if not set in KopiaBackup
+	// TODO: validate cron format
 	DefaultSchedule string `json:"defaultSchedule,omitempty"`
 
 	// Password for Kopia repository, ignored if RepositoryPasswordExistingSecret is set

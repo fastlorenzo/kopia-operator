@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kopia-sftp-credentials
+  namespace: default
+type: Opaque
+stringData:
+  # SFTP username (required)
+  username: "kopia-user"
+
+  # SFTP password (required if keyData is not provided)
+  password: "your-sftp-password"
+
+  # SSH private key (required if password is not provided)
+  # keyData: |
+  #   -----BEGIN OPENSSH PRIVATE KEY----- #gitleaks:allow
+  #   b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn
+  #   ... (your private key content) ...
+  #   -----END OPENSSH PRIVATE KEY-----

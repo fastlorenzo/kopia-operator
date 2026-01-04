@@ -59,6 +59,12 @@ spec:
               suspend:
                 description: 'Optional: suspend (default=false) will suspend the cronjob'
                 type: boolean
+              userCredentialsSecret:
+                description: |-
+                  Server user credentials secret name (auto-generated, read-only)
+                  This field is populated by the operator when server mode is enabled
+                  Contains username and password for authenticating to the Kopia Server
+                type: string
             required:
             - pvcName
             - repository
@@ -69,8 +75,92 @@ spec:
             properties:
               active:
                 type: boolean
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the backup's state
+                items:
+                  description: "Condition contains details for one aspect of the current
+                    state of this API Resource.\n---\nThis struct is intended for
+                    direct use as an array at the field path .status.conditions.  For
+                    example,\n\n\n\ttype FooStatus struct{\n\t    // Represents the
+                    observations of a foo's current state.\n\t    // Known .status.conditions.type
+                    are: \"Available\", \"Progressing\", and \"Degraded\"\n\t    //
+                    +patchMergeKey=type\n\t    // +patchStrategy=merge\n\t    // +listType=map\n\t
+                    \   // +listMapKey=type\n\t    Conditions []metav1.Condition `json:\"conditions,omitempty\"
+                    patchStrategy:\"merge\" patchMergeKey:\"type\" protobuf:\"bytes,1,rep,name=conditions\"`\n\n\n\t
+                    \   // other fields\n\t}"
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: |-
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
+                        ---
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
+                        useful (see .node.status.conditions), the ability to deconflict is important.
+                        The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              connected:
+                description: Whether the backup is connected to the server
+                type: boolean
               fromAnnotation:
                 type: boolean
+              lastBackupTime:
+                description: Timestamp of the last successful backup
+                format: date-time
+                type: string
+              serverURL:
+                description: Server connection status (when server mode is enabled)
+                type: string
+              username:
+                description: Username used for server authentication
+                type: string
             required:
             - active
             - fromAnnotation
@@ -157,7 +247,9 @@ spec:
                     type: integer
                 type: object
               defaultSchedule:
-                description: Cronjob for default schedule if not set in KopiaBackup
+                description: |-
+                  Cronjob for default schedule if not set in KopiaBackup
+                  TODO: validate cron format
                 type: string
               description:
                 default: Cluster
@@ -217,12 +309,189 @@ spec:
                   (must be in the same namespace); the password should be in KOPIA_PASSWORD
                   key
                 type: string
-              sftpOptions:
+              server:
+                description: |-
+                  Server configuration for running Kopia in server mode
+                  When enabled, a centralized Kopia Server will be deployed
                 properties:
-                  configMapName:
-                    description: configMapName is a reference to a ConfigMap containing
-                      the SFTP configuration.
+                  enabled:
+                    default: false
+                    description: |-
+                      Enable Kopia Server mode
+                      When enabled, the operator will deploy a Kopia Server for this repository
+                      and backups will connect through the server instead of directly to storage
+                    type: boolean
+                  exposure:
+                    description: Exposure configuration (how to expose the server)
+                    properties:
+                      servicePort:
+                        default: 51515
+                        format: int32
+                        type: integer
+                      serviceType:
+                        default: ClusterIP
+                        description: Service configuration
+                        type: string
+                      type:
+                        default: Service
+                        description: |-
+                          Type of exposure: Service only for now
+                          TODO: Add Ingress and HTTPRoute support later
+                        enum:
+                        - Service
+                        - ""
+                        type: string
+                    type: object
+                  extraArgs:
+                    description: Additional command-line arguments for kopia server
+                      start
+                    items:
+                      type: string
+                    type: array
+                  image:
+                    default: ghcr.io/fastlorenzo/kopia:latest
+                    description: Container image for the Kopia Server
                     type: string
+                  persistentVolumeClaim:
+                    description: |-
+                      PersistentVolumeClaim for server internal state
+                      If not provided, server will use emptyDir (data lost on restart)
+                    type: string
+                  replicas:
+                    default: 1
+                    description: Number of server replicas
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  resources:
+                    description: Resource requirements for the server
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+
+                          This is an alpha field and requires enabling the
+                          DynamicResourceAllocation feature gate.
+
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  serverAdminPassword:
+                    description: |-
+                      Server admin password for server control and user management
+                      If not provided, will use the repository password
+                    type: string
+                  serverAdminPasswordExistingSecret:
+                    description: |-
+                      Secret containing server admin password
+                      Expected key: password
+                      If provided, takes precedence over ServerAdminPassword
+                    type: string
+                  tls:
+                    description: TLS configuration for the server
+                    properties:
+                      autoGenerate:
+                        default: true
+                        description: Auto-generate self-signed certificate if secret
+                          not provided
+                        type: boolean
+                      enabled:
+                        default: true
+                        description: Enable TLS for the server
+                        type: boolean
+                      secretName:
+                        description: |-
+                          Name of the secret containing TLS certificate and key
+                          Secret should contain 'tls.crt' and 'tls.key' keys
+                        type: string
+                    required:
+                    - enabled
+                    type: object
+                required:
+                - enabled
+                type: object
+              sftpOptions:
+                description: KopiaRepositoryStorageSFTPSpec defines SFTP storage options
+                  for Kopia repository
+                properties:
+                  credentialsSecret:
+                    description: |-
+                      Secret containing SFTP credentials
+                      Expected keys: username, password (optional), keyData (optional - SSH private key)
+                      At least one of password or keyData must be provided
+                    type: string
+                  dirShards:
+                    description: Directory shards configuration
+                    items:
+                      type: integer
+                    type: array
+                  externalSSH:
+                    default: false
+                    description: Use external SSH command instead of built-in SSH
+                    type: boolean
+                  host:
+                    description: SFTP server hostname
+                    type: string
+                  knownHostsData:
+                    description: Known hosts data for SSH host key verification
+                    type: string
+                  path:
+                    description: Path to the repository on the SFTP server
+                    type: string
+                  port:
+                    default: 22
+                    description: SFTP server port
+                    type: integer
+                  sshCommand:
+                    default: ssh
+                    description: SSH command to use when ExternalSSH is true
+                    type: string
+                required:
+                - credentialsSecret
+                - host
+                - path
                 type: object
               storageType:
                 description: Storage type (currently only filesystem and sftp are
@@ -239,6 +508,90 @@ spec:
             type: object
           status:
             description: KopiaRepositoryStatus defines the observed state of KopiaRepository
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the repository's state
+                items:
+                  description: "Condition contains details for one aspect of the current
+                    state of this API Resource.\n---\nThis struct is intended for
+                    direct use as an array at the field path .status.conditions.  For
+                    example,\n\n\n\ttype FooStatus struct{\n\t    // Represents the
+                    observations of a foo's current state.\n\t    // Known .status.conditions.type
+                    are: \"Available\", \"Progressing\", and \"Degraded\"\n\t    //
+                    +patchMergeKey=type\n\t    // +patchStrategy=merge\n\t    // +listType=map\n\t
+                    \   // +listMapKey=type\n\t    Conditions []metav1.Condition `json:\"conditions,omitempty\"
+                    patchStrategy:\"merge\" patchMergeKey:\"type\" protobuf:\"bytes,1,rep,name=conditions\"`\n\n\n\t
+                    \   // other fields\n\t}"
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: |-
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
+                        ---
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
+                        useful (see .node.status.conditions), the ability to deconflict is important.
+                        The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              serverDeployment:
+                description: Deployment name of the Kopia Server
+                type: string
+              serverReady:
+                description: Server status (when server mode is enabled)
+                type: boolean
+              serverService:
+                description: Service name for the Kopia Server
+                type: string
+              serverURL:
+                description: URL to connect to the Kopia Server
+                type: string
             type: object
         type: object
     served: true
@@ -428,6 +781,42 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - backup.cloudinfra.be
@@ -646,7 +1035,7 @@ spec:
         - --leader-elect
         command:
         - /manager
-        image: ghcr.io/fastlorenzo/kopia-operator:main
+        image: ghcr.io/fastlorenzo/kopia-operator:dev
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
