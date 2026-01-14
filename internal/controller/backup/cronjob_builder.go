@@ -126,6 +126,11 @@ func constructCronJob(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cronJobName,
 			Namespace: backup.Namespace,
+			Labels: map[string]string{
+				"backup.cloudinfra.be/backup":     backup.Name,
+				"backup.cloudinfra.be/repository": backup.Spec.Repository,
+				"backup.cloudinfra.be/pvc-name":   backup.Spec.PVCName,
+			},
 		},
 		Spec: batchv1.CronJobSpec{
 			ConcurrencyPolicy:          batchv1.ForbidConcurrent,
@@ -134,14 +139,23 @@ func constructCronJob(
 			SuccessfulJobsHistoryLimit: int32Ptr(maxBackupHistoryEntries),
 			FailedJobsHistoryLimit:     int32Ptr(maxBackupHistoryEntries),
 			JobTemplate: batchv1.JobTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"backup.cloudinfra.be/backup":     backup.Name,
+						"backup.cloudinfra.be/repository": backup.Spec.Repository,
+						"backup.cloudinfra.be/pvc-name":   backup.Spec.PVCName,
+					},
+				},
 				Spec: batchv1.JobSpec{
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: map[string]string{
-								"backup.cloudinfra.be/pvc-name":  backup.Spec.PVCName,
-								"backup.cloudinfra.be/node-name": nodeName,
-								"app.kubernetes.io/name":         appName,
-								"sidecar.istio.io/inject":        "false",
+								"backup.cloudinfra.be/backup":     backup.Name,
+								"backup.cloudinfra.be/repository": backup.Spec.Repository,
+								"backup.cloudinfra.be/pvc-name":   backup.Spec.PVCName,
+								"backup.cloudinfra.be/node-name":  nodeName,
+								"app.kubernetes.io/name":          appName,
+								"sidecar.istio.io/inject":         "false",
 							},
 						},
 						Spec: corev1.PodSpec{

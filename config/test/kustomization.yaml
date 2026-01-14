@@ -1,0 +1,19 @@
+# Kustomization for e2e testing with locally built images in Kind
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../default
+
+patches:
+  # Patch the manager deployment to use IfNotPresent for local images
+  - target:
+      kind: Deployment
+      name: controller-manager
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+      - op: replace
+        path: /spec/template/spec/containers/1/imagePullPolicy
+        value: IfNotPresent

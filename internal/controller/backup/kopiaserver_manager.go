@@ -620,13 +620,16 @@ eval "$SFTP_CMD"
 	// Full command with repository connection and server start
 	var cmd string
 
-	// Admin user setup
+	// Admin user setup - note: we disable set -e temporarily because grep returns 1 if no match
 	adminUserSetup := fmt.Sprintf(`
 # Set up admin user
 ADMIN_USER="%s@%s"
 echo "Checking admin user: $ADMIN_USER"
-kopia server user list | grep "$ADMIN_USER" >/dev/null 2>&1
-if [ $? -ne 0 ]; then
+set +e
+kopia server user list 2>/dev/null | grep -q "$ADMIN_USER"
+USER_EXISTS=$?
+set -e
+if [ $USER_EXISTS -ne 0 ]; then
   echo "Creating admin user: $ADMIN_USER"
   kopia server user add "$ADMIN_USER" --user-password="${KOPIA_PASSWORD}"
 else

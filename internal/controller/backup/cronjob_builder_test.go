@@ -723,3 +723,222 @@ func TestConstructCronJob_MountPathWithoutAppName(t *testing.T) {
 	assert.Contains(t, command, "/data/myns/test-pvc")
 	assert.NotContains(t, command, "/data/myns//test-pvc")
 }
+
+func TestBuildDirectModeConfig_FilesystemWithNFS(t *testing.T) {
+	repo := &backupv1alpha1.KopiaRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-repo",
+			Namespace: "default",
+		},
+		Spec: backupv1alpha1.KopiaRepositorySpec{
+			StorageType:        "filesystem",
+			RepositoryPassword: "test-password",
+			FileSystemOptions: backupv1alpha1.KopiaRepositoryStorageFileSystemSpec{
+				Path:      "/mnt/backup",
+				NFSServer: "nfs.example.com",
+				NFSPath:   "/exports/backup",
+			},
+		},
+	}
+
+	envVars := []corev1.EnvVar{}
+	envFrom := []corev1.EnvFromSource{}
+	volumeMounts := []corev1.VolumeMount{}
+	volumes := []corev1.Volume{}
+	cacheDir := "/cache"
+
+	resultEnvVars, _, resultVolumeMounts, resultVolumes := buildDirectModeConfig(
+		repo, cacheDir, envVars, envFrom, volumeMounts, volumes,
+	)
+
+	// Verify cache directory env var is set
+	var hasCacheDir bool
+	for _, env := range resultEnvVars {
+		if env.Name == "KOPIA_CACHE_DIRECTORY" && env.Value == cacheDir {
+			hasCacheDir = true
+		}
+	}
+	assert.True(t, hasCacheDir, "Expected KOPIA_CACHE_DIRECTORY env var")
+
+	// Verify NFS volume is created
+	var hasNFSVolume bool
+	for _, vol := range resultVolumes {
+		if vol.Name == "repo" && vol.NFS != nil {
+			hasNFSVolume = true
+			assert.Equal(t, "nfs.example.com", vol.NFS.Server)
+			assert.Equal(t, "/exports/backup", vol.NFS.Path)
+		}
+	}
+	assert.True(t, hasNFSVolume, "Expected NFS volume")
+
+	// Verify repo mount
+	var hasRepoMount bool
+	for _, mount := range resultVolumeMounts {
+		if mount.Name == "repo" && mount.MountPath == "/mnt/backup" {
+			hasRepoMount = true
+		}
+	}
+	assert.True(t, hasRepoMount, "Expected repo volume mount at /mnt/backup")
+}
+
+func TestConstructConfigMap_WithStorageTypeAndPath(t *testing.T) {
+	backup := &backupv1alpha1.KopiaBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-backup",
+			Namespace: "default",
+		},
+		Spec: backupv1alpha1.KopiaBackupSpec{
+			PVCName:    "test-pvc",
+			Repository: "test-repo",
+		},
+	}
+
+	repo := &backupv1alpha1.KopiaRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-repo",
+			Namespace: "default",
+		},
+		Spec: backupv1alpha1.KopiaRepositorySpec{
+			Hostname:    "test-host",
+			Username:    "test-user",
+			StorageType: "filesystem",
+			FileSystemOptions: backupv1alpha1.KopiaRepositoryStorageFileSystemSpec{
+				Path: "/backup/repo",
+			},
+			Caching: backupv1alpha1.KopiaRepositoryCachingSpec{
+				CacheDirectory:         "/cache",
+				ContentCacheSizeBytes:  1024,
+				MetadataCacheSizeBytes: 512,
+			},
+		},
+	}
+
+	configMap := constructConfigMap(backup, repo)
+
+	require.NotNil(t, configMap)
+	require.Contains(t, configMap.Data, "repository.config")
+
+	configData := configMap.Data["repository.config"]
+	assert.Contains(t, configData, `"type": "filesystem"`)
+	assert.Contains(t, configData, `"path": "/backup/repo"`)
+	assert.Contains(t, configData, `"hostname": "test-host"`)
+	assert.Contains(t, configData, `"username": "test-user"`)
+	assert.Contains(t, configData, `"cacheDirectory": "/cache"`)
+}
+
+func TestConstructCronJob_WithNodeNameEmpty(t *testing.T) {
+	backup := &backupv1alpha1.KopiaBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-backup",
+			Namespace: "default",
+		},
+		Spec: backupv1alpha1.KopiaBackupSpec{
+			PVCName:    "test-pvc",
+			Schedule:   "0 2 * * *",
+			Repository: "test-repo",
+		},
+	}
+
+	repo := &backupv1alpha1.KopiaRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-repo",
+			Namespace: "default",
+		},
+		Spec: backupv1alpha1.KopiaRepositorySpec{
+			Hostname:    "test-host",
+			Username:    "test-user",
+			StorageType: "filesystem",
+		},
+	}
+
+	// Empty node name - should still create CronJob but with empty affinity value
+	cronJob := constructCronJob(backup, "snapshot-test-pvc", "", "my-app", repo)
+
+	require.NotNil(t, cronJob)
+
+	// Verify node affinity is still present (with empty value)
+	require.NotNil(t, cronJob.Spec.JobTemplate.Spec.Template.Spec.Affinity)
+	nodeAffinity := cronJob.Spec.JobTemplate.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	require.NotNil(t, nodeAffinity)
+}
+
+func TestBuildBackupCommand_WithMountPath(t *testing.T) {
+	backup := &backupv1alpha1.KopiaBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-backup",
+			Namespace: "default",
+		},
+		Spec: backupv1alpha1.KopiaBackupSpec{
+			PVCName:    "test-pvc",
+			Repository: "test-repo",
+		},
+	}
+
+	repo := &backupv1alpha1.KopiaRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-repo",
+			Namespace: "default",
+		},
+		Spec: backupv1alpha1.KopiaRepositorySpec{
+			Hostname:    "test-host",
+			Username:    "test-user",
+			StorageType: "filesystem",
+			Server: backupv1alpha1.KopiaServerSpec{
+				Enabled: false,
+			},
+		},
+	}
+
+	// Test with specific mount path
+	mountPath := "/custom/path/to/pvc"
+	result := buildBackupCommand(backup, repo, mountPath)
+
+	assert.Contains(t, result, "kopia snap create "+mountPath)
+	assert.Contains(t, result, "kopia snap list "+mountPath)
+}
+
+func TestBuildServerModeConfig_WithRepositoryPasswordSecret(t *testing.T) {
+	backup := &backupv1alpha1.KopiaBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-backup",
+			Namespace: "default",
+		},
+		Spec: backupv1alpha1.KopiaBackupSpec{
+			PVCName: "test-pvc",
+		},
+	}
+
+	repo := &backupv1alpha1.KopiaRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-repo",
+			Namespace: "default",
+		},
+		Spec: backupv1alpha1.KopiaRepositorySpec{
+			RepositoryPasswordExistingSecret: "my-custom-password-secret",
+		},
+		Status: backupv1alpha1.KopiaRepositoryStatus{
+			TLSCertFingerprint: "FINGERPRINT123",
+		},
+	}
+
+	envVars := []corev1.EnvVar{}
+	envFrom := []corev1.EnvFromSource{}
+	volumeMounts := []corev1.VolumeMount{}
+	volumes := []corev1.Volume{}
+
+	resultEnvVars, _, _, _ := buildServerModeConfig(
+		backup, repo, envVars, envFrom, volumeMounts, volumes,
+	)
+
+	// Verify KOPIA_PASSWORD references the custom secret
+	var hasCustomPassword bool
+	for _, env := range resultEnvVars {
+		if env.Name == "KOPIA_PASSWORD" && env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
+			// Should still use the user credentials secret, not the repository secret
+			if strings.Contains(env.ValueFrom.SecretKeyRef.Name, "kopia-backup-user") {
+				hasCustomPassword = true
+			}
+		}
+	}
+	assert.True(t, hasCustomPassword, "Expected KOPIA_PASSWORD from user credentials secret")
+}

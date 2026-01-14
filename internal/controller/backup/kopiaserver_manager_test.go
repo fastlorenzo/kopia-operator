@@ -848,4 +848,611 @@ func TestKopiaServerManager_ConstructServerCommand(t *testing.T) {
 		assert.Contains(t, cmd, "--insecure")
 		assert.Contains(t, cmd, "--no-ui")
 	})
+
+	t.Run("unsupported storage type", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-repo",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Hostname:    "test-host",
+				Username:    "test-user",
+				StorageType: "unsupported",
+			},
+		}
+
+		cmd := manager.constructServerCommand(repo)
+
+		assert.Contains(t, cmd, "Unsupported storage type")
+	})
+
+	t.Run("SFTP with external SSH", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-repo",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Hostname:    "test-host",
+				Username:    "test-user",
+				StorageType: "sftp",
+				SFTPOptions: backupv1alpha1.KopiaRepositoryStorageSFTPSpec{
+					Host:        "sftp.example.com",
+					Port:        2222,
+					Path:        "/backup",
+					ExternalSSH: true,
+					SSHCommand:  "/usr/bin/ssh",
+				},
+			},
+		}
+
+		cmd := manager.constructServerCommand(repo)
+
+		assert.Contains(t, cmd, "--external-ssh")
+		assert.Contains(t, cmd, "--ssh-command=/usr/bin/ssh")
+	})
+
+	t.Run("SFTP with known hosts", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-repo",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Hostname:    "test-host",
+				Username:    "test-user",
+				StorageType: "sftp",
+				SFTPOptions: backupv1alpha1.KopiaRepositoryStorageSFTPSpec{
+					Host:           "sftp.example.com",
+					Port:           22,
+					Path:           "/backup",
+					KnownHostsData: "sftp.example.com ssh-rsa AAAAB3...",
+				},
+			},
+		}
+
+		cmd := manager.constructServerCommand(repo)
+
+		assert.Contains(t, cmd, "known_hosts")
+	})
+}
+
+func TestKopiaServerManager_EnsureServerAdminPasswordSecret(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = backupv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	log := zap.New(zap.UseDevMode(true))
+
+	t.Run("skip when using existing secret", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo",
+				Namespace: "default",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					ServerAdminPasswordExistingSecret: "existing-admin-secret",
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().WithScheme(scheme).Build()
+		manager := NewKopiaServerManager(client, scheme, log)
+
+		ctx := context.Background()
+		err := manager.EnsureServerAdminPasswordSecret(ctx, repo)
+
+		require.NoError(t, err)
+
+		// Verify no secret was created
+		secret := &corev1.Secret{}
+		err = client.Get(ctx, types.NamespacedName{
+			Name:      "kopia-server-admin-test-repo",
+			Namespace: "default",
+		}, secret)
+		require.Error(t, err) // Should not find the secret
+	})
+
+	t.Run("skip when no server admin password", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo",
+				Namespace: "default",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					ServerAdminPassword: "", // No password
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().WithScheme(scheme).Build()
+		manager := NewKopiaServerManager(client, scheme, log)
+
+		ctx := context.Background()
+		err := manager.EnsureServerAdminPasswordSecret(ctx, repo)
+
+		require.NoError(t, err)
+	})
+
+	t.Run("create secret with admin password", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo",
+				Namespace: "default",
+				UID:       "test-uid",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					ServerAdminPassword: "my-admin-password",
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().WithScheme(scheme).Build()
+		manager := NewKopiaServerManager(client, scheme, log)
+
+		ctx := context.Background()
+		err := manager.EnsureServerAdminPasswordSecret(ctx, repo)
+
+		require.NoError(t, err)
+
+		// Verify secret was created
+		secret := &corev1.Secret{}
+		err = client.Get(ctx, types.NamespacedName{
+			Name:      "kopia-server-admin-test-repo",
+			Namespace: "default",
+		}, secret)
+		require.NoError(t, err)
+		assert.Equal(t, "my-admin-password", secret.StringData["password"])
+	})
+
+	t.Run("update existing secret", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo",
+				Namespace: "default",
+				UID:       "test-uid",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					ServerAdminPassword: "new-admin-password",
+				},
+			},
+		}
+
+		existingSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kopia-server-admin-test-repo",
+				Namespace: "default",
+			},
+			Data: map[string][]byte{
+				"password": []byte("old-admin-password"),
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(existingSecret).
+			Build()
+
+		manager := NewKopiaServerManager(client, scheme, log)
+
+		ctx := context.Background()
+		err := manager.EnsureServerAdminPasswordSecret(ctx, repo)
+
+		require.NoError(t, err)
+
+		// Verify secret was updated
+		secret := &corev1.Secret{}
+		err = client.Get(ctx, types.NamespacedName{
+			Name:      "kopia-server-admin-test-repo",
+			Namespace: "default",
+		}, secret)
+		require.NoError(t, err)
+		// StringData overwrites Data on update
+		assert.Equal(t, "new-admin-password", secret.StringData["password"])
+	})
+}
+
+func TestKopiaServerManager_EnsureTLSSecret(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = backupv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	log := zap.New(zap.UseDevMode(true))
+
+	t.Run("auto-generate TLS certificate", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo",
+				Namespace: "default",
+				UID:       "test-uid",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					TLS: backupv1alpha1.KopiaServerTLSSpec{
+						// No secret name - auto-generate
+					},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().WithScheme(scheme).Build()
+		manager := NewKopiaServerManager(client, scheme, log)
+
+		ctx := context.Background()
+		fingerprint, err := manager.EnsureTLSSecret(ctx, repo)
+
+		require.NoError(t, err)
+		assert.NotEmpty(t, fingerprint)
+
+		// Verify secret was created
+		secret := &corev1.Secret{}
+		err = client.Get(ctx, types.NamespacedName{
+			Name:      "kopia-server-tls-test-repo",
+			Namespace: "default",
+		}, secret)
+		require.NoError(t, err)
+		assert.Contains(t, secret.Data, "tls.crt")
+		assert.Contains(t, secret.Data, "tls.key")
+		assert.Contains(t, secret.Data, "fingerprint")
+	})
+
+	t.Run("use existing auto-generated secret", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo",
+				Namespace: "default",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					TLS: backupv1alpha1.KopiaServerTLSSpec{},
+				},
+			},
+		}
+
+		existingSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kopia-server-tls-test-repo",
+				Namespace: "default",
+			},
+			Data: map[string][]byte{
+				"tls.crt":     []byte("fake-cert"),
+				"tls.key":     []byte("fake-key"),
+				"fingerprint": []byte("EXISTING_FINGERPRINT"),
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(existingSecret).
+			Build()
+
+		manager := NewKopiaServerManager(client, scheme, log)
+
+		ctx := context.Background()
+		fingerprint, err := manager.EnsureTLSSecret(ctx, repo)
+
+		require.NoError(t, err)
+		assert.Equal(t, "EXISTING_FINGERPRINT", fingerprint)
+	})
+
+	t.Run("user-provided secret not found", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo",
+				Namespace: "default",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					TLS: backupv1alpha1.KopiaServerTLSSpec{
+						SecretName: "my-tls-secret", // User-provided but doesn't exist
+					},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().WithScheme(scheme).Build()
+		manager := NewKopiaServerManager(client, scheme, log)
+
+		ctx := context.Background()
+		_, err := manager.EnsureTLSSecret(ctx, repo)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("user-provided secret missing tls.crt", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo",
+				Namespace: "default",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					TLS: backupv1alpha1.KopiaServerTLSSpec{
+						SecretName: "my-tls-secret",
+					},
+				},
+			},
+		}
+
+		existingSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-tls-secret",
+				Namespace: "default",
+			},
+			Data: map[string][]byte{
+				"tls.key": []byte("fake-key"),
+				// Missing tls.crt
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(existingSecret).
+			Build()
+
+		manager := NewKopiaServerManager(client, scheme, log)
+
+		ctx := context.Background()
+		_, err := manager.EnsureTLSSecret(ctx, repo)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "missing 'tls.crt'")
+	})
+
+	t.Run("user-provided secret missing tls.key", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo",
+				Namespace: "default",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					TLS: backupv1alpha1.KopiaServerTLSSpec{
+						SecretName: "my-tls-secret",
+					},
+				},
+			},
+		}
+
+		existingSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-tls-secret",
+				Namespace: "default",
+			},
+			Data: map[string][]byte{
+				"tls.crt": []byte("fake-cert"),
+				// Missing tls.key
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(existingSecret).
+			Build()
+
+		manager := NewKopiaServerManager(client, scheme, log)
+
+		ctx := context.Background()
+		_, err := manager.EnsureTLSSecret(ctx, repo)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "missing 'tls.key'")
+	})
+
+	t.Run("with custom DNS names", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo",
+				Namespace: "default",
+				UID:       "test-uid",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					TLS: backupv1alpha1.KopiaServerTLSSpec{
+						CertificateCommonName: "kopia.example.com",
+						CertificateDNSNames:   []string{"backup.example.com", "kopia.internal"},
+					},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().WithScheme(scheme).Build()
+		manager := NewKopiaServerManager(client, scheme, log)
+
+		ctx := context.Background()
+		fingerprint, err := manager.EnsureTLSSecret(ctx, repo)
+
+		require.NoError(t, err)
+		assert.NotEmpty(t, fingerprint)
+	})
+}
+
+func TestKopiaServerManager_EnsureServerService_Update(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = backupv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	log := zap.New(zap.UseDevMode(true))
+
+	repo := &backupv1alpha1.KopiaRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-repo",
+			Namespace: "default",
+			UID:       "test-uid",
+		},
+		Spec: backupv1alpha1.KopiaRepositorySpec{
+			Server: backupv1alpha1.KopiaServerSpec{
+				Enabled: true,
+				Exposure: backupv1alpha1.KopiaServerExposureSpec{
+					ServiceType: corev1.ServiceTypeLoadBalancer,
+					ServicePort: 9443,
+				},
+			},
+		},
+	}
+
+	existingService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kopia-server-test-repo",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP, // Old type
+			Ports: []corev1.ServicePort{
+				{
+					Name: "api",
+					Port: 51515, // Old port
+				},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(existingService).
+		Build()
+
+	manager := NewKopiaServerManager(client, scheme, log)
+
+	ctx := context.Background()
+	service, err := manager.EnsureServerService(ctx, repo)
+
+	require.NoError(t, err)
+	require.NotNil(t, service)
+
+	// Verify service was updated
+	assert.Equal(t, corev1.ServiceTypeLoadBalancer, service.Spec.Type)
+	assert.Equal(t, int32(9443), service.Spec.Ports[0].Port)
+}
+
+func TestKopiaServerManager_GetRepositoryPasswordSecretKeyRef(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = backupv1alpha1.AddToScheme(scheme)
+
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	log := zap.New(zap.UseDevMode(true))
+	manager := NewKopiaServerManager(client, scheme, log)
+
+	t.Run("with existing secret", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-repo",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				RepositoryPasswordExistingSecret: "my-password-secret",
+			},
+		}
+
+		ref := manager.getRepositoryPasswordSecretKeyRef(repo)
+
+		assert.Equal(t, "my-password-secret", ref.LocalObjectReference.Name)
+		assert.Equal(t, "KOPIA_PASSWORD", ref.Key)
+	})
+
+	t.Run("with managed secret", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-repo",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				RepositoryPassword: "inline-password",
+			},
+		}
+
+		ref := manager.getRepositoryPasswordSecretKeyRef(repo)
+
+		assert.Equal(t, "kopia-repo-test-repo", ref.LocalObjectReference.Name)
+		assert.Equal(t, "password", ref.Key)
+	})
+}
+
+func TestKopiaServerManager_GetServerAdminPasswordSecretKeyRef(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = backupv1alpha1.AddToScheme(scheme)
+
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	log := zap.New(zap.UseDevMode(true))
+	manager := NewKopiaServerManager(client, scheme, log)
+
+	t.Run("with existing admin secret", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-repo",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					ServerAdminPasswordExistingSecret: "my-admin-secret",
+				},
+			},
+		}
+
+		ref := manager.getServerAdminPasswordSecretKeyRef(repo)
+
+		assert.Equal(t, "my-admin-secret", ref.LocalObjectReference.Name)
+		assert.Equal(t, "password", ref.Key)
+	})
+
+	t.Run("with inline admin password", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-repo",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				Server: backupv1alpha1.KopiaServerSpec{
+					ServerAdminPassword: "inline-admin-password",
+				},
+			},
+		}
+
+		ref := manager.getServerAdminPasswordSecretKeyRef(repo)
+
+		assert.Equal(t, "kopia-server-admin-test-repo", ref.LocalObjectReference.Name)
+		assert.Equal(t, "password", ref.Key)
+	})
+
+	t.Run("fallback to repository password", func(t *testing.T) {
+		repo := &backupv1alpha1.KopiaRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-repo",
+			},
+			Spec: backupv1alpha1.KopiaRepositorySpec{
+				RepositoryPassword: "repo-password",
+				Server:             backupv1alpha1.KopiaServerSpec{
+					// No admin password configured
+				},
+			},
+		}
+
+		ref := manager.getServerAdminPasswordSecretKeyRef(repo)
+
+		// Should fall back to repository password
+		assert.Equal(t, "kopia-repo-test-repo", ref.LocalObjectReference.Name)
+	})
+}
+
+func TestKopiaServerManager_CalculateCertFingerprint(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = backupv1alpha1.AddToScheme(scheme)
+
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	log := zap.New(zap.UseDevMode(true))
+	manager := NewKopiaServerManager(client, scheme, log)
+
+	t.Run("invalid PEM", func(t *testing.T) {
+		_, err := manager.calculateCertFingerprint([]byte("not valid pem"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to decode PEM")
+	})
+
+	t.Run("invalid certificate", func(t *testing.T) {
+		invalidPEM := []byte(`-----BEGIN CERTIFICATE-----
+not a valid certificate
+-----END CERTIFICATE-----`)
+		_, err := manager.calculateCertFingerprint(invalidPEM)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse certificate")
+	})
 }
