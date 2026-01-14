@@ -276,9 +276,6 @@ func (m *KopiaServerManager) constructServerDeployment(
 		})
 	}
 
-	// Determine TLS secret name - remove duplicate declaration at line 279
-	// tlsSecretName is already declared above
-
 	// Build volumes
 	volumes := []corev1.Volume{
 		{

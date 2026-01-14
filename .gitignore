@@ -5,6 +5,7 @@
 *.so
 *.dylib
 bin/*
+!bin/.gitkeep
 Dockerfile.cross
 
 # Test binary, built with `go test -c`
@@ -26,5 +27,8 @@ go.work
 *.swo
 *~
 
-# Custom
+# Build output
+output-dir/
+
+# Local test data
 test/data/*

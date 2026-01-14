@@ -20,14 +20,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // KopiaBackupSpec defines the desired state of KopiaBackup
 type KopiaBackupSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
 	// Name of the PVC to backup
 	PVCName string `json:"pvcName"`
 	// Schedule for the backup
@@ -75,9 +69,6 @@ type BackupHistoryEntry struct {
 
 // KopiaBackupStatus defines the observed state of KopiaBackup
 type KopiaBackupStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
 	Active         bool `json:"active"`
 	FromAnnotation bool `json:"fromAnnotation"`
 

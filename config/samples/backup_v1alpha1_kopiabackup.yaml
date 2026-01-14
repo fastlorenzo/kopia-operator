@@ -6,4 +6,23 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: kopiabackup-sample
 spec:
-  # TODO(user): Add fields here
+  # Reference to the KopiaRepository where backups will be stored
+  repositoryName: kopiarepository-sample
+
+  # PVC to backup
+  pvcName: my-app-data
+
+  # Backup schedule (cron format) - runs daily at 2 AM
+  schedule: "0 2 * * *"
+
+  # Optional: Custom Kopia image
+  # image: "kopia/kopia:latest"
+
+  # Optional: Resource limits for backup jobs
+  # resources:
+  #   requests:
+  #     memory: "128Mi"
+  #     cpu: "100m"
+  #   limits:
+  #     memory: "512Mi"
+  #     cpu: "500m"

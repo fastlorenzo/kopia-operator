@@ -21,9 +21,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // KopiaServerTLSSpec defines TLS configuration for the Kopia Server
 // TLS is always enabled as Kopia requires HTTPS for server connections
 type KopiaServerTLSSpec struct {
@@ -186,9 +183,6 @@ type KopiaRepositoryCachingSpec struct {
 
 // KopiaRepositorySpec defines the desired state of KopiaRepository
 type KopiaRepositorySpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
 	// Kopia repository hostname
 	Hostname string `json:"hostname"`
 	// Kopia repository username
@@ -233,9 +227,6 @@ type KopiaRepositorySpec struct {
 
 // KopiaRepositoryStatus defines the observed state of KopiaRepository
 type KopiaRepositoryStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
 	// Server status (when server mode is enabled)
 	ServerReady bool `json:"serverReady,omitempty"`
 
