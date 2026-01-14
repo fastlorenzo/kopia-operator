@@ -18,7 +18,16 @@ package backup
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"net"
+	"time"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -145,14 +154,9 @@ func (m *KopiaServerManager) GetServerURL(
 		servicePort = repo.Spec.Server.Exposure.ServicePort
 	}
 
-	// For ClusterIP and NodePort, use the internal service name
-	protocol := "http"
-	if repo.Spec.Server.TLS.Enabled {
-		protocol = "https"
-	}
-
-	return fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d",
-		protocol, serviceName, repo.Namespace, servicePort)
+	// Kopia requires HTTPS for server connections
+	return fmt.Sprintf("https://%s.%s.svc.cluster.local:%d",
+		serviceName, repo.Namespace, servicePort)
 }
 
 // IsServerReady checks if the server deployment is ready
@@ -204,6 +208,9 @@ func (m *KopiaServerManager) constructServerDeployment(
 		"app.kubernetes.io/managed-by": "kopia-operator",
 	}
 
+	// Determine TLS secret name for fingerprint
+	tlsSecretName := m.getTLSSecretName(repo)
+
 	// Build container environment
 	env := []corev1.EnvVar{
 		{
@@ -222,6 +229,18 @@ func (m *KopiaServerManager) constructServerDeployment(
 				SecretKeyRef: m.getServerAdminPasswordSecretKeyRef(repo),
 			},
 		},
+		{
+			Name: "KOPIA_TLS_FINGERPRINT",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: tlsSecretName,
+					},
+					Key:      "fingerprint",
+					Optional: func(b bool) *bool { return &b }(true),
+				},
+			},
+		},
 	}
 
 	// Build volume mounts
@@ -233,6 +252,11 @@ func (m *KopiaServerManager) constructServerDeployment(
 		{
 			Name:      "config",
 			MountPath: "/config",
+		},
+		{
+			Name:      "tls",
+			MountPath: "/tls",
+			ReadOnly:  true,
 		},
 	}
 
@@ -252,6 +276,9 @@ func (m *KopiaServerManager) constructServerDeployment(
 		})
 	}
 
+	// Determine TLS secret name - remove duplicate declaration at line 279
+	// tlsSecretName is already declared above
+
 	// Build volumes
 	volumes := []corev1.Volume{
 		{
@@ -264,6 +291,15 @@ func (m *KopiaServerManager) constructServerDeployment(
 			Name: "config",
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+		{
+			Name: "tls",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  tlsSecretName,
+					DefaultMode: func(i int32) *int32 { return &i }(0400),
+				},
 			},
 		},
 	}
@@ -305,32 +341,36 @@ func (m *KopiaServerManager) constructServerDeployment(
 			},
 		},
 		Resources: repo.Spec.Server.Resources,
-		LivenessProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path:   "/api/v1/repo/status",
-					Port:   intstr.FromInt(51515),
-					Scheme: corev1.URISchemeHTTP,
-				},
+	}
+
+	// Configure probes - use TCP probe for liveness (simpler, just checks port is open)
+	// and exec probe with certificate fingerprint file for readiness
+	container.LivenessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{
+				Port: intstr.FromInt(51515),
 			},
-			InitialDelaySeconds: 30,
-			PeriodSeconds:       10,
-			TimeoutSeconds:      5,
-			FailureThreshold:    3,
 		},
-		ReadinessProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path:   "/api/v1/repo/status",
-					Port:   intstr.FromInt(51515),
-					Scheme: corev1.URISchemeHTTP,
-				},
+		InitialDelaySeconds: 30,
+		PeriodSeconds:       10,
+		TimeoutSeconds:      5,
+		FailureThreshold:    3,
+	}
+
+	// For readiness, we need to verify the server is actually responding
+	// Use the fingerprint from env var (populated from TLS secret) or calculate from cert file as fallback
+	readinessCmd := `FINGERPRINT="${KOPIA_TLS_FINGERPRINT:-$(openssl x509 -in /tls/tls.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':')}" && kopia server status --address=https://127.0.0.1:51515 --server-username=admin --server-password="$KOPIA_SERVER_PASSWORD" --server-cert-fingerprint=$FINGERPRINT`
+
+	container.ReadinessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"/bin/sh", "-c", readinessCmd},
 			},
-			InitialDelaySeconds: 10,
-			PeriodSeconds:       5,
-			TimeoutSeconds:      3,
-			FailureThreshold:    3,
 		},
+		InitialDelaySeconds: 10,
+		PeriodSeconds:       5,
+		TimeoutSeconds:      5,
+		FailureThreshold:    3,
 	}
 
 	// If no resources specified, set defaults
@@ -524,8 +564,8 @@ eval "$SFTP_CMD"
 		repoConnect = fmt.Sprintf("echo 'Unsupported storage type: %s' && exit 1", repo.Spec.StorageType)
 	}
 
-	// Server start command
-	serverStart := "kopia server start --insecure --address=0.0.0.0:51515 --server-control-username=admin --server-control-password=\"${KOPIA_SERVER_PASSWORD}\""
+	// Server start command - always use TLS
+	serverStart := "kopia server start --tls-cert-file=/tls/tls.crt --tls-key-file=/tls/tls.key --address=0.0.0.0:51515 --server-control-username=admin --server-control-password=\"${KOPIA_SERVER_PASSWORD}\""
 
 	// Add extra args if specified
 	if len(repo.Spec.Server.ExtraArgs) > 0 {
@@ -811,4 +851,215 @@ func (m *KopiaServerManager) getServerAdminPasswordSecretKeyRef(repo *backupv1al
 
 	// Fall back to repository password
 	return m.getRepositoryPasswordSecretKeyRef(repo)
+}
+
+// getTLSSecretName returns the name of the TLS secret for the server
+func (m *KopiaServerManager) getTLSSecretName(repo *backupv1alpha1.KopiaRepository) string {
+	// If user provided a secret, use it
+	if repo.Spec.Server.TLS.SecretName != "" {
+		return repo.Spec.Server.TLS.SecretName
+	}
+	// Use auto-generated secret name
+	return fmt.Sprintf("kopia-server-tls-%s", repo.Name)
+}
+
+// EnsureTLSSecret ensures TLS certificates exist for the Kopia Server
+// If user provides a secret name, it validates the secret exists
+// Otherwise, it auto-generates a self-signed certificate
+// Returns the SHA256 fingerprint of the certificate
+func (m *KopiaServerManager) EnsureTLSSecret(
+	ctx context.Context,
+	repo *backupv1alpha1.KopiaRepository,
+) (string, error) {
+	tlsSecretName := m.getTLSSecretName(repo)
+
+	// Check if secret already exists
+	secret := &corev1.Secret{}
+	err := m.Client.Get(ctx, types.NamespacedName{
+		Name:      tlsSecretName,
+		Namespace: repo.Namespace,
+	}, secret)
+
+	if err == nil {
+		// Secret exists
+		if repo.Spec.Server.TLS.SecretName != "" {
+			// User-provided secret - validate it has required keys
+			certPEM, ok := secret.Data["tls.crt"]
+			if !ok {
+				return "", fmt.Errorf("TLS secret %s missing 'tls.crt' key", tlsSecretName)
+			}
+			if _, ok := secret.Data["tls.key"]; !ok {
+				return "", fmt.Errorf("TLS secret %s missing 'tls.key' key", tlsSecretName)
+			}
+			// Calculate fingerprint from user-provided cert
+			fingerprint, err := m.calculateCertFingerprint(certPEM)
+			if err != nil {
+				return "", fmt.Errorf("failed to calculate fingerprint from user-provided cert: %w", err)
+			}
+			m.Log.Info("Using user-provided TLS secret", "name", tlsSecretName, "fingerprint", fingerprint)
+			return fingerprint, nil
+		}
+		// Auto-generated secret already exists - get fingerprint
+		if fingerprint, ok := secret.Data["fingerprint"]; ok {
+			m.Log.Info("TLS secret already exists", "name", tlsSecretName, "fingerprint", string(fingerprint))
+			return string(fingerprint), nil
+		}
+		// Fingerprint not stored, calculate from cert
+		fingerprint, err := m.calculateCertFingerprint(secret.Data["tls.crt"])
+		if err != nil {
+			return "", fmt.Errorf("failed to calculate fingerprint: %w", err)
+		}
+		m.Log.Info("TLS secret already exists", "name", tlsSecretName, "fingerprint", fingerprint)
+		return fingerprint, nil
+	}
+
+	if !apierrors.IsNotFound(err) {
+		return "", err
+	}
+
+	// Secret doesn't exist
+	if repo.Spec.Server.TLS.SecretName != "" {
+		// User specified a secret but it doesn't exist
+		return "", fmt.Errorf("TLS secret %s not found - please create the secret with 'tls.crt' and 'tls.key' keys", tlsSecretName)
+	}
+
+	// Auto-generate self-signed certificate
+	m.Log.Info("Auto-generating TLS certificate", "name", tlsSecretName)
+
+	serviceName := fmt.Sprintf("kopia-server-%s", repo.Name)
+	servicePort := int32(51515)
+	if repo.Spec.Server.Exposure.ServicePort != 0 {
+		servicePort = repo.Spec.Server.Exposure.ServicePort
+	}
+
+	// Build DNS names for the certificate
+	dnsNames := []string{
+		serviceName,
+		fmt.Sprintf("%s.%s", serviceName, repo.Namespace),
+		fmt.Sprintf("%s.%s.svc", serviceName, repo.Namespace),
+		fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, repo.Namespace),
+	}
+
+	// Add any additional DNS names from spec
+	if len(repo.Spec.Server.TLS.CertificateDNSNames) > 0 {
+		dnsNames = append(dnsNames, repo.Spec.Server.TLS.CertificateDNSNames...)
+	}
+
+	// Common name
+	commonName := repo.Spec.Server.TLS.CertificateCommonName
+	if commonName == "" {
+		commonName = fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, repo.Namespace)
+	}
+
+	// Generate certificate
+	certPEM, keyPEM, err := m.generateSelfSignedCert(commonName, dnsNames, servicePort)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate TLS certificate: %w", err)
+	}
+
+	// Calculate fingerprint
+	fingerprint, err := m.calculateCertFingerprint(certPEM)
+	if err != nil {
+		return "", fmt.Errorf("failed to calculate fingerprint: %w", err)
+	}
+
+	// Create secret with fingerprint stored as additional key
+	tlsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tlsSecretName,
+			Namespace: repo.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "kopia-server",
+				"app.kubernetes.io/instance":   repo.Name,
+				"app.kubernetes.io/managed-by": "kopia-operator",
+			},
+		},
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"tls.crt":     certPEM,
+			"tls.key":     keyPEM,
+			"fingerprint": []byte(fingerprint),
+		},
+	}
+
+	if err := ctrl.SetControllerReference(repo, tlsSecret, m.Scheme); err != nil {
+		return "", err
+	}
+
+	m.Log.Info("Creating TLS Secret", "name", tlsSecretName, "fingerprint", fingerprint)
+	if err := m.Client.Create(ctx, tlsSecret); err != nil {
+		return "", err
+	}
+
+	return fingerprint, nil
+}
+
+// calculateCertFingerprint calculates the SHA256 fingerprint of a PEM-encoded certificate
+func (m *KopiaServerManager) calculateCertFingerprint(certPEM []byte) (string, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return "", fmt.Errorf("failed to decode PEM block")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	// Calculate SHA256 hash
+	hash := sha256.Sum256(cert.Raw)
+
+	// Format as uppercase hex without colons (Kopia's expected format)
+	return fmt.Sprintf("%X", hash), nil
+}
+
+// generateSelfSignedCert generates a self-signed TLS certificate
+func (m *KopiaServerManager) generateSelfSignedCert(commonName string, dnsNames []string, port int32) ([]byte, []byte, error) {
+	// Generate private key
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate private key: %w", err)
+	}
+
+	// Create certificate template
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate serial number: %w", err)
+	}
+
+	notBefore := time.Now()
+	notAfter := notBefore.Add(365 * 24 * time.Hour * 10) // 10 years
+
+	// Add localhost for probes that connect via 127.0.0.1
+	allDNSNames := append([]string{"localhost"}, dnsNames...)
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   commonName,
+			Organization: []string{"kopia-operator"},
+		},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              allDNSNames,
+		// Include 127.0.0.1 for probes that connect to localhost
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+	}
+
+	// Create certificate
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create certificate: %w", err)
+	}
+
+	// Encode certificate to PEM
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+	// Encode private key to PEM
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
+
+	return certPEM, keyPEM, nil
 }

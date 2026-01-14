@@ -432,22 +432,24 @@ spec:
                   tls:
                     description: TLS configuration for the server
                     properties:
-                      autoGenerate:
-                        default: true
-                        description: Auto-generate self-signed certificate if secret
-                          not provided
-                        type: boolean
-                      enabled:
-                        default: true
-                        description: Enable TLS for the server
-                        type: boolean
+                      certificateCommonName:
+                        description: |-
+                          CertificateCommonName is the CN for the auto-generated certificate
+                          Defaults to the service name
+                        type: string
+                      certificateDNSNames:
+                        description: |-
+                          CertificateDNSNames are additional DNS names for the auto-generated certificate
+                          The service name is always included automatically
+                        items:
+                          type: string
+                        type: array
                       secretName:
                         description: |-
                           Name of the secret containing TLS certificate and key
                           Secret should contain 'tls.crt' and 'tls.key' keys
+                          If not provided, a self-signed certificate will be auto-generated
                         type: string
-                    required:
-                    - enabled
                     type: object
                 required:
                 - enabled
@@ -591,6 +593,12 @@ spec:
                 type: string
               serverURL:
                 description: URL to connect to the Kopia Server
+                type: string
+              tlsCertFingerprint:
+                description: |-
+                  TLSCertFingerprint is the SHA256 fingerprint of the server's TLS certificate
+                  Format: uppercase hex without colons (e.g., "A1B2C3...")
+                  Used by clients to verify the server's certificate
                 type: string
             type: object
         type: object
@@ -782,6 +790,12 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  verbs:
+  - create
 - apiGroups:
   - ""
   resources:

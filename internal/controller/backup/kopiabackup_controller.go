@@ -18,20 +18,23 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,8 +50,9 @@ import (
 // KopiaBackupReconciler reconciles a KopiaBackup object
 type KopiaBackupReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Log    logr.Logger
+	Scheme     *runtime.Scheme
+	Log        logr.Logger
+	RestConfig *rest.Config
 }
 
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiabackups,verbs=get;list;watch;create;update;patch;delete
@@ -56,7 +60,9 @@ type KopiaBackupReconciler struct {
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiabackups/finalizers,verbs=update
 //+kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=pods/exec,verbs=create
 //+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -76,7 +82,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Get the KopiaBackup instance
 	var kBackup backupv1alpha1.KopiaBackup
 	if err := r.Get(ctx, req.NamespacedName, &kBackup); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			log.Info("KopiaBackup resource not found, will check if this is a PVC request")
 			return handlePVCRequest(log, ctx, r, req)
 		} else {
@@ -152,37 +158,64 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	log.Info("Found KopiaRepository", "repositoryName", repository.Name)
 
-	// Check if the repository configmap exists (only if backup type is filesystem)
-	if repository.Spec.StorageType == storageTypeFilesystem {
-		configMap := &corev1.ConfigMap{}
-		configMapName := fmt.Sprintf("kopia-config-%s", repository.Name)
-		configMapRetrievalError := r.Get(ctx,
-			types.NamespacedName{Name: configMapName, Namespace: kBackup.Namespace},
-			configMap,
-		)
-		newConfigMap := constructConfigMap(&kBackup, repository)
-		if configMapRetrievalError != nil {
-			if client.IgnoreNotFound(configMapRetrievalError) != nil {
-				// Real error, return
-				log.Error(configMapRetrievalError, "unable to fetch ConfigMap")
-				return ctrl.Result{}, configMapRetrievalError
-			}
-			// Not found, create the ConfigMap
-			log.Info("ConfigMap not found, creating", "ConfigMap", configMapName)
+	// Handle server mode vs direct mode
+	if repository.Spec.Server.Enabled {
+		log.Info("Repository has server mode enabled, ensuring user credentials")
 
-			if err := r.Create(ctx, newConfigMap); err != nil {
-				log.Error(err, "unable to create ConfigMap")
-				return ctrl.Result{}, err
+		// Create user manager
+		userManager, err := NewKopiaUserManager(r.Client, r.Scheme, log, r.RestConfig)
+		if err != nil {
+			log.Error(err, "Failed to create user manager")
+			return ctrl.Result{}, err
+		}
+
+		// Ensure user credentials for this backup
+		_, err = userManager.EnsureUser(ctx, &kBackup, repository)
+		if err != nil {
+			// Check if the server is not ready yet
+			var serverNotReady *ServerNotReadyError
+			if errors.As(err, &serverNotReady) {
+				log.Info("Kopia server not ready yet, will retry", "message", serverNotReady.Message)
+				return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 			}
-		} else {
-			log.Info("Found ConfigMap", "ConfigMap", configMap.Name)
-			// Check if the ConfigMap has the correct configuration
-			if shouldUpdateConfigMap(configMap, newConfigMap) {
-				log.Info("Updating ConfigMap", "ConfigMap", configMap.Name)
-				configMap.Data = newConfigMap.Data
-				if err := r.Update(ctx, configMap); err != nil {
-					log.Error(err, "unable to update ConfigMap")
+			log.Error(err, "failed to ensure user credentials for backup")
+			return ctrl.Result{}, err
+		}
+
+		log.Info("User credentials ensured for server mode")
+	} else {
+		// Direct mode - handle configmap for filesystem storage
+		if repository.Spec.StorageType == storageTypeFilesystem {
+			configMap := &corev1.ConfigMap{}
+			configMapName := fmt.Sprintf("kopia-config-%s", repository.Name)
+			configMapRetrievalError := r.Get(ctx,
+				types.NamespacedName{Name: configMapName, Namespace: kBackup.Namespace},
+				configMap,
+			)
+			newConfigMap := constructConfigMap(&kBackup, repository)
+			if configMapRetrievalError != nil {
+				if client.IgnoreNotFound(configMapRetrievalError) != nil {
+					// Real error, return
+					log.Error(configMapRetrievalError, "unable to fetch ConfigMap")
+					return ctrl.Result{}, configMapRetrievalError
+				}
+				// Not found, create the ConfigMap
+				log.Info("ConfigMap not found, creating", "ConfigMap", configMapName)
+
+				if err := r.Create(ctx, newConfigMap); err != nil {
+					log.Error(err, "unable to create ConfigMap")
 					return ctrl.Result{}, err
+				}
+			} else {
+				log.Info("Found ConfigMap", "ConfigMap", configMap.Name)
+				// Check if the ConfigMap has the correct configuration
+				if shouldUpdateConfigMap(configMap, newConfigMap) {
+					log.Info("Updating ConfigMap", "ConfigMap", configMap.Name)
+					configMap.Data = newConfigMap.Data
+					if err := r.Update(ctx, configMap); err != nil {
+						log.Error(err, "unable to update ConfigMap")
+						return ctrl.Result{}, err
+					}
 				}
 			}
 		}
@@ -288,7 +321,7 @@ func handlePVCRequest(
 	// Check if the request is for a PVC
 	pvc := &corev1.PersistentVolumeClaim{}
 	if err := r.Get(ctx, req.NamespacedName, pvc); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			log.Info("PVC resource not found")
 			return ctrl.Result{}, nil
 		} else {
@@ -402,8 +435,25 @@ func shouldDeleteKopiaBackup(
 		_, ok := pvc.Labels["backup.cloudinfra.be/repository"]
 		if !ok {
 			log.Info("PVC does not have the required labels, deleting KopiaBackup")
-			// we should delete the KopiaBackup object here
-			err := r.Delete(ctx, kBackup)
+
+			// Get the repository to check if server mode is enabled
+			repository, err := getKopiaRepositoryByName(ctx, r.Client, kBackup.Spec.Repository, log)
+			if err == nil && repository != nil && repository.Spec.Server.Enabled {
+				// Server mode - cleanup user credentials
+				log.Info("Cleaning up user credentials for server mode")
+				userManager, err := NewKopiaUserManager(r.Client, r.Scheme, log, r.RestConfig)
+				if err != nil {
+					log.Error(err, "Failed to create user manager")
+					return false, err
+				}
+				if err := userManager.DeleteUser(ctx, kBackup, repository); err != nil {
+					log.Error(err, "failed to delete user credentials")
+					// Continue with deletion even if cleanup fails
+				}
+			}
+
+			// Delete the KopiaBackup object
+			err = r.Delete(ctx, kBackup)
 			if err != nil {
 				log.Error(err, "unable to delete KopiaBackup")
 				return true, err
@@ -511,6 +561,38 @@ func getRuntimeInfo(
 	return nodeName, appName, podName, nil
 }
 
+// buildBackupCommand builds the command to run in the backup container
+func buildBackupCommand(backup *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.KopiaRepository, mountPath string) string {
+	if repo.Spec.Server.Enabled {
+		// Server mode - connect to Kopia server instead of direct repository
+		// Kopia requires HTTPS for server connections
+		serverURL := fmt.Sprintf("https://kopia-server-%s.%s.svc.cluster.local:51515",
+			repo.Name,
+			repo.Namespace)
+
+		// Credentials are provided via environment variables from the secret
+		// KOPIA_SERVER_USERNAME format is "username@hostname", we extract parts using shell parameter expansion
+		// KOPIA_PASSWORD is set from KOPIA_SERVER_PASSWORD via env var in the container spec
+		// KOPIA_TLS_FINGERPRINT is the server's TLS certificate fingerprint from the TLS secret
+		return "" +
+			"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/04] Connecting to Kopia Server...\"    && " +
+			"kopia repository connect server --url=" + serverURL + " " +
+			"--server-cert-fingerprint=\"${KOPIA_TLS_FINGERPRINT}\" " +
+			"--override-username=\"${KOPIA_SERVER_USERNAME%%@*}\" " +
+			"--override-hostname=\"${KOPIA_SERVER_USERNAME#*@}\" && " +
+			"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/04] Create snapshot ...\"          && kopia snap create " + mountPath + " && " +
+			"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[03/04] List snapshots ...\"           && kopia snap list " + mountPath + " && " +
+			"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[04/04] Disconnect repo ...\"           && kopia repo disconnect \n"
+	}
+
+	// Direct mode - original behavior
+	return "" +
+		"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/04] Create snapshot ...\"          && kopia snap create " + mountPath + "\n" +
+		"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/04] List snapshots ...\"           && kopia snap list " + mountPath + "\n" +
+		"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[03/04] Show stats ...\"               && kopia content stats \n" +
+		"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[04/04] Show maintenance info ...\"      && kopia maintenance info \n"
+}
+
 func constructCronJob(
 	backup *backupv1alpha1.KopiaBackup,
 	cronJobName string,
@@ -553,11 +635,6 @@ func constructCronJob(
 			Name:      "data",
 			MountPath: mountPath,
 		},
-		{
-			Name:      "config",
-			MountPath: "/config/repository.config",
-			SubPath:   "repository.config",
-		},
 	}
 
 	var volumes = []corev1.Volume{
@@ -571,93 +648,153 @@ func constructCronJob(
 		},
 	}
 
-	switch repo.Spec.StorageType {
-	case storageTypeFilesystem:
-		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      "repo",
-			MountPath: repo.Spec.FileSystemOptions.Path,
-		})
+	// Handle server mode vs direct mode
+	if repo.Spec.Server.Enabled {
+		// Server mode - mount user credentials secret
+		secretName := fmt.Sprintf("kopia-backup-user-%s-%s", backup.Namespace, backup.Spec.PVCName)
 
-		// Mount the configmap to the pod
-		volumes = append(volumes, corev1.Volume{
-			Name: "config",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: fmt.Sprintf("kopia-config-%s", repo.Name),
-					},
-				},
-			},
-		})
-
-		// Mount the NFS volume to the pod
-		volumes = append(volumes, corev1.Volume{
-			Name: "repo",
-			VolumeSource: corev1.VolumeSource{
-				NFS: &corev1.NFSVolumeSource{
-					Server: repo.Spec.FileSystemOptions.NFSServer,
-					Path:   repo.Spec.FileSystemOptions.NFSPath,
-				},
-			},
-		})
-
-	case storageTypeSFTP:
-		volumes = append(volumes,
-			// SFTP credentials from secret
-			corev1.Volume{
-				Name: "sftp-credentials",
-				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{
-						SecretName:  repo.Spec.SFTPOptions.CredentialsSecret,
-						DefaultMode: func(i int32) *int32 { return &i }(0600),
-					},
-				},
-			},
-			// Config volume for repository.config
-			corev1.Volume{
-				Name: "config",
-				VolumeSource: corev1.VolumeSource{
-					EmptyDir: &corev1.EmptyDirVolumeSource{},
-				},
-			},
-			// emptyDir for kopia cache
-			corev1.Volume{
-				Name: "kopia-cache",
-				VolumeSource: corev1.VolumeSource{
-					EmptyDir: &corev1.EmptyDirVolumeSource{
-						SizeLimit: resource.NewQuantity(3<<30, resource.BinarySI), // 3GiB
-					},
-				},
-			},
-		)
-
-		volumeMounts = append(volumeMounts,
-			corev1.VolumeMount{
-				Name:      "sftp-credentials",
-				MountPath: "/sftp-creds",
-				ReadOnly:  true,
-			},
-			corev1.VolumeMount{
-				Name:      "kopia-cache",
-				MountPath: kopiaCacheDirectory,
-			},
-		)
-	}
-
-	if repo.Spec.RepositoryPasswordExistingSecret != "" {
+		// Add environment variables from credentials secret
 		envFrom = append(envFrom, corev1.EnvFromSource{
 			SecretRef: &corev1.SecretEnvSource{
 				LocalObjectReference: corev1.LocalObjectReference{
-					Name: repo.Spec.RepositoryPasswordExistingSecret,
+					Name: secretName,
 				},
 			},
 		})
-	} else {
-		if repo.Spec.RepositoryPassword != "" {
+
+		// Set KOPIA_PASSWORD from KOPIA_SERVER_PASSWORD in the secret
+		envVars = append(envVars, corev1.EnvVar{
+			Name: "KOPIA_PASSWORD",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: secretName,
+					},
+					Key: "KOPIA_SERVER_PASSWORD",
+				},
+			},
+		})
+
+		// Set KOPIA_TLS_FINGERPRINT from the repository status
+		// The fingerprint is stored in the repository status after the TLS secret is created
+		if repo.Status.TLSCertFingerprint != "" {
 			envVars = append(envVars, corev1.EnvVar{
-				Name:  "KOPIA_PASSWORD",
-				Value: repo.Spec.RepositoryPassword,
+				Name:  "KOPIA_TLS_FINGERPRINT",
+				Value: repo.Status.TLSCertFingerprint,
 			})
+		}
+
+		// Add kopia cache volume (emptyDir)
+		volumes = append(volumes, corev1.Volume{
+			Name: "kopia-cache",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{
+					SizeLimit: resource.NewQuantity(3<<30, resource.BinarySI), // 3GiB
+				},
+			},
+		})
+
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "kopia-cache",
+			MountPath: kopiaCacheDirectory,
+		})
+	} else {
+		// Direct mode - existing behavior
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "config",
+			MountPath: "/config/repository.config",
+			SubPath:   "repository.config",
+		})
+
+		switch repo.Spec.StorageType {
+		case storageTypeFilesystem:
+			volumeMounts = append(volumeMounts, corev1.VolumeMount{
+				Name:      "repo",
+				MountPath: repo.Spec.FileSystemOptions.Path,
+			})
+
+			// Mount the configmap to the pod
+			volumes = append(volumes, corev1.Volume{
+				Name: "config",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: fmt.Sprintf("kopia-config-%s", repo.Name),
+						},
+					},
+				},
+			})
+
+			// Mount the NFS volume to the pod
+			volumes = append(volumes, corev1.Volume{
+				Name: "repo",
+				VolumeSource: corev1.VolumeSource{
+					NFS: &corev1.NFSVolumeSource{
+						Server: repo.Spec.FileSystemOptions.NFSServer,
+						Path:   repo.Spec.FileSystemOptions.NFSPath,
+					},
+				},
+			})
+
+		case storageTypeSFTP:
+			volumes = append(volumes,
+				// SFTP credentials from secret
+				corev1.Volume{
+					Name: "sftp-credentials",
+					VolumeSource: corev1.VolumeSource{
+						Secret: &corev1.SecretVolumeSource{
+							SecretName:  repo.Spec.SFTPOptions.CredentialsSecret,
+							DefaultMode: func(i int32) *int32 { return &i }(0600),
+						},
+					},
+				},
+				// Config volume for repository.config
+				corev1.Volume{
+					Name: "config",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+				// emptyDir for kopia cache
+				corev1.Volume{
+					Name: "kopia-cache",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{
+							SizeLimit: resource.NewQuantity(3<<30, resource.BinarySI), // 3GiB
+						},
+					},
+				},
+			)
+
+			volumeMounts = append(volumeMounts,
+				corev1.VolumeMount{
+					Name:      "sftp-credentials",
+					MountPath: "/sftp-creds",
+					ReadOnly:  true,
+				},
+				corev1.VolumeMount{
+					Name:      "kopia-cache",
+					MountPath: kopiaCacheDirectory,
+				},
+			)
+		}
+
+		// Add repository password for direct mode
+		if repo.Spec.RepositoryPasswordExistingSecret != "" {
+			envFrom = append(envFrom, corev1.EnvFromSource{
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: repo.Spec.RepositoryPasswordExistingSecret,
+					},
+				},
+			})
+		} else {
+			if repo.Spec.RepositoryPassword != "" {
+				envVars = append(envVars, corev1.EnvVar{
+					Name:  "KOPIA_PASSWORD",
+					Value: repo.Spec.RepositoryPassword,
+				})
+			}
 		}
 	}
 
@@ -668,12 +805,13 @@ func constructCronJob(
 	//  command: ["/scripts/sleep.sh"]
 	//  args: ["1", "900"]
 
+	// TODO: parameterize the sleep time
 	var initContainers []corev1.Container
 	initContainers = append(initContainers, corev1.Container{
 		Name:    "wait",
 		Image:   "ghcr.io/fastlorenzo/kopia:0.16.1@sha256:e473aeb43e13e298853898c3613da2a4834f4bff2ccf747fbb2a90072d9e92c8",
 		Command: []string{"/scripts/sleep.sh"},
-		Args:    []string{"1", "900"},
+		Args:    []string{"1", "10"},
 	})
 
 	cronJob := &batchv1.CronJob{
@@ -720,17 +858,9 @@ func constructCronJob(
 							InitContainers: initContainers,
 							Containers: []corev1.Container{
 								{
-									Name:  "snapshot",
-									Image: "ghcr.io/fastlorenzo/kopia:0.20.1@sha256:4a2660db62960eb0b4ba98982c4566bcc9dd2ee3b15b31af9626146aa4e5d8e3",
-									Args: []string{"/bin/bash", "-c", "" +
-										// "printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/07] Create repo ...\"              && [[ ! -f " + repo.Spec.FileSystemOptions.Path + "/kopia.repository.f ]] && kopia repository create filesystem --path=" + repo.Spec.FileSystemOptions.Path + "\n" +
-										// "printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/07] Connect to repo ...\"          && kopia repo connect filesystem --path=" + repo.Spec.FileSystemOptions.Path + " --override-hostname=" + repo.Spec.Hostname + " --override-username=" + repo.Spec.Username + "\n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/04] Create snapshot ...\"          && kopia snap create " + mountPath + "\n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/04] List snapshots ...\"           && kopia snap list " + mountPath + "\n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[03/04] Show stats ...\"               && kopia content stats \n" +
-										"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[04/04] Show maintenance info ...\"      && kopia maintenance info \n",
-									// "printf \"\\e[1;32m%-6s\\e[m\\n\" \"[05/05] Disconnect repo ...\"           && kopia repo disconnect \n",
-									},
+									Name:         "snapshot",
+									Image:        "ghcr.io/fastlorenzo/kopia:0.20.1@sha256:4a2660db62960eb0b4ba98982c4566bcc9dd2ee3b15b31af9626146aa4e5d8e3",
+									Args:         []string{"/bin/bash", "-c", buildBackupCommand(backup, repo, mountPath)},
 									Env:          envVars,
 									EnvFrom:      envFrom,
 									VolumeMounts: volumeMounts,
@@ -817,7 +947,7 @@ func getKopiaRepositoryByName(
 
 	if err != nil {
 		// Real error, return it
-		if !errors.IsNotFound(err) {
+		if !apierrors.IsNotFound(err) {
 			log.Error(err, "error getting KopiaRepository", "repositoryName", repositoryName)
 			return nil, err
 		}
@@ -934,6 +1064,16 @@ func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}); err != nil {
 		return err
 	}
+
+	// Add a runnable to reconcile all KopiaBackups on startup
+	// This ensures that any changes in CronJob construction are applied to existing resources
+	if err := mgr.Add(&kopiaBackupStartupReconciler{
+		client: mgr.GetClient(),
+		log:    r.Log,
+	}); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupv1alpha1.KopiaBackup{}).
 		Owns(&batchv1.CronJob{}).
@@ -948,4 +1088,44 @@ func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)
+}
+
+// kopiaBackupStartupReconciler is a Runnable that triggers reconciliation of all KopiaBackups on startup
+// This ensures that any changes in CronJob construction logic are applied to existing CronJobs
+type kopiaBackupStartupReconciler struct {
+	client client.Client
+	log    logr.Logger
+}
+
+// Start implements the Runnable interface
+func (r *kopiaBackupStartupReconciler) Start(ctx context.Context) error {
+	// Wait a short time for the cache to sync
+	time.Sleep(5 * time.Second)
+
+	r.log.Info("Triggering startup reconciliation for all KopiaBackups")
+
+	// List all KopiaBackups
+	backupList := &backupv1alpha1.KopiaBackupList{}
+	if err := r.client.List(ctx, backupList); err != nil {
+		r.log.Error(err, "Failed to list KopiaBackups for startup reconciliation")
+		return nil // Don't fail startup, just log the error
+	}
+
+	// Touch each KopiaBackup to trigger reconciliation by updating an annotation
+	for _, backup := range backupList.Items {
+		backupCopy := backup.DeepCopy()
+		if backupCopy.Annotations == nil {
+			backupCopy.Annotations = make(map[string]string)
+		}
+		backupCopy.Annotations["backup.cloudinfra.be/last-reconcile-trigger"] = time.Now().Format(time.RFC3339)
+
+		if err := r.client.Update(ctx, backupCopy); err != nil {
+			r.log.Error(err, "Failed to trigger reconciliation for KopiaBackup", "name", backup.Name, "namespace", backup.Namespace)
+			continue
+		}
+		r.log.Info("Triggered reconciliation for KopiaBackup", "name", backup.Name, "namespace", backup.Namespace)
+	}
+
+	r.log.Info("Startup reconciliation trigger complete", "count", len(backupList.Items))
+	return nil
 }

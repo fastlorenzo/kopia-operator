@@ -25,18 +25,22 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // KopiaServerTLSSpec defines TLS configuration for the Kopia Server
+// TLS is always enabled as Kopia requires HTTPS for server connections
 type KopiaServerTLSSpec struct {
-	// Enable TLS for the server
-	// +kubebuilder:default:=true
-	Enabled bool `json:"enabled"`
-
 	// Name of the secret containing TLS certificate and key
 	// Secret should contain 'tls.crt' and 'tls.key' keys
+	// If not provided, a self-signed certificate will be auto-generated
 	SecretName string `json:"secretName,omitempty"`
 
-	// Auto-generate self-signed certificate if secret not provided
-	// +kubebuilder:default:=true
-	AutoGenerate bool `json:"autoGenerate,omitempty"`
+	// CertificateCommonName is the CN for the auto-generated certificate
+	// Defaults to the service name
+	// +optional
+	CertificateCommonName string `json:"certificateCommonName,omitempty"`
+
+	// CertificateDNSNames are additional DNS names for the auto-generated certificate
+	// The service name is always included automatically
+	// +optional
+	CertificateDNSNames []string `json:"certificateDNSNames,omitempty"`
 }
 
 // KopiaServerExposureSpec defines how the Kopia Server should be exposed
@@ -243,6 +247,11 @@ type KopiaRepositoryStatus struct {
 
 	// Service name for the Kopia Server
 	ServerService string `json:"serverService,omitempty"`
+
+	// TLSCertFingerprint is the SHA256 fingerprint of the server's TLS certificate
+	// Format: uppercase hex without colons (e.g., "A1B2C3...")
+	// Used by clients to verify the server's certificate
+	TLSCertFingerprint string `json:"tlsCertFingerprint,omitempty"`
 
 	// Conditions represent the latest available observations of the repository's state
 	Conditions []metav1.Condition `json:"conditions,omitempty"`

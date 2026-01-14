@@ -107,6 +107,19 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			return ctrl.Result{}, err
 		}
 
+		// Ensure TLS certificate secret and get fingerprint
+		fingerprint, err := serverManager.EnsureTLSSecret(ctx, repo)
+		if err != nil {
+			log.Error(err, "failed to ensure TLS secret")
+			r.updateCondition(repo, "Ready", metav1.ConditionFalse,
+				"TLSSecretFailed",
+				fmt.Sprintf("Failed to create/update TLS secret: %v", err))
+			return ctrl.Result{}, err
+		}
+
+		// Store fingerprint in status
+		repo.Status.TLSCertFingerprint = fingerprint
+
 		// Ensure server deployment
 		deployment, err := serverManager.EnsureServerDeployment(ctx, repo)
 		if err != nil {
