@@ -44,6 +44,35 @@ type KopiaBackupSpec struct {
 	UserCredentialsSecret string `json:"userCredentialsSecret,omitempty"`
 }
 
+// BackupStatus represents the status of a backup operation
+// +kubebuilder:validation:Enum=Successful;Failed;Pending;InProgress
+type BackupStatus string
+
+const (
+	// BackupStatusSuccessful indicates the backup completed successfully
+	BackupStatusSuccessful BackupStatus = "Successful"
+	// BackupStatusFailed indicates the backup failed
+	BackupStatusFailed BackupStatus = "Failed"
+	// BackupStatusPending indicates the backup has not run yet
+	BackupStatusPending BackupStatus = "Pending"
+	// BackupStatusInProgress indicates the backup is currently running
+	BackupStatusInProgress BackupStatus = "InProgress"
+)
+
+// BackupHistoryEntry represents a single backup execution record
+type BackupHistoryEntry struct {
+	// Timestamp of when the backup was started
+	StartTime metav1.Time `json:"startTime"`
+	// Timestamp of when the backup completed (nil if still running)
+	CompletionTime *metav1.Time `json:"completionTime,omitempty"`
+	// Status of the backup (Successful, Failed, InProgress)
+	Status BackupStatus `json:"status"`
+	// Name of the Job that executed this backup
+	JobName string `json:"jobName,omitempty"`
+	// Message providing additional details about the backup status
+	Message string `json:"message,omitempty"`
+}
+
 // KopiaBackupStatus defines the observed state of KopiaBackup
 type KopiaBackupStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
@@ -61,8 +90,21 @@ type KopiaBackupStatus struct {
 	// Whether the backup is connected to the server
 	Connected bool `json:"connected,omitempty"`
 
-	// Timestamp of the last successful backup
+	// Status of the last backup (Successful, Failed, Pending, InProgress)
+	// +optional
+	LastBackupStatus BackupStatus `json:"lastBackupStatus,omitempty"`
+
+	// Timestamp of the last backup attempt (regardless of success or failure)
+	// +optional
 	LastBackupTime *metav1.Time `json:"lastBackupTime,omitempty"`
+
+	// Timestamp of the last successful backup
+	// +optional
+	LastSuccessfulBackupTime *metav1.Time `json:"lastSuccessfulBackupTime,omitempty"`
+
+	// History of the last 10 backup executions
+	// +optional
+	BackupHistory []BackupHistoryEntry `json:"backupHistory,omitempty"`
 
 	// Conditions represent the latest available observations of the backup's state
 	Conditions []metav1.Condition `json:"conditions,omitempty"`

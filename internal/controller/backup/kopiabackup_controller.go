@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -53,17 +55,23 @@ type KopiaBackupReconciler struct {
 	Scheme     *runtime.Scheme
 	Log        logr.Logger
 	RestConfig *rest.Config
+	Recorder   record.EventRecorder
 }
+
+// Maximum number of backup history entries to keep
+const maxBackupHistoryEntries = 3
 
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiabackups,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiabackups/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiabackups/finalizers,verbs=update
 //+kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=pods/exec,verbs=create
 //+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -292,6 +300,12 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
+	// Update backup status from related jobs
+	if err := r.updateBackupStatusFromJobs(ctx, log, &kBackup); err != nil {
+		log.Error(err, "failed to update backup status from jobs")
+		// Don't return error, this is not critical
+	}
+
 	// Update status or other finalization
 	return ctrl.Result{}, nil
 }
@@ -309,6 +323,199 @@ func shouldUpdateConfigMap(found *corev1.ConfigMap, new *corev1.ConfigMap) bool 
 	// else return false
 
 	return !reflect.DeepEqual(found.Data, new.Data)
+}
+
+// updateBackupStatusFromJobs updates the KopiaBackup status based on related Job executions
+func (r *KopiaBackupReconciler) updateBackupStatusFromJobs(
+	ctx context.Context,
+	log logr.Logger,
+	kBackup *backupv1alpha1.KopiaBackup,
+) error {
+	cronJobName := getCronJobNameFromPVCName(kBackup.Spec.PVCName)
+
+	// List all jobs owned by the CronJob for this backup
+	var jobList batchv1.JobList
+	if err := r.List(ctx, &jobList, client.InNamespace(kBackup.Namespace)); err != nil {
+		return fmt.Errorf("failed to list jobs: %w", err)
+	}
+
+	// Filter jobs that belong to our CronJob (name starts with cronjob name)
+	var relatedJobs []batchv1.Job
+	for _, job := range jobList.Items {
+		if strings.HasPrefix(job.Name, cronJobName+"-") {
+			relatedJobs = append(relatedJobs, job)
+		}
+	}
+
+	// Sort jobs by start time (newest first)
+	sort.Slice(relatedJobs, func(i, j int) bool {
+		iTime := relatedJobs[i].Status.StartTime
+		jTime := relatedJobs[j].Status.StartTime
+		if iTime == nil && jTime == nil {
+			return false
+		}
+		if iTime == nil {
+			return false
+		}
+		if jTime == nil {
+			return true
+		}
+		return iTime.After(jTime.Time)
+	})
+
+	// Build backup history from jobs
+	var backupHistory []backupv1alpha1.BackupHistoryEntry
+	var lastBackupTime *metav1.Time
+	var lastSuccessfulBackupTime *metav1.Time
+	var lastBackupStatus backupv1alpha1.BackupStatus
+
+	for i, job := range relatedJobs {
+		entry := buildBackupHistoryEntry(&job)
+		backupHistory = append(backupHistory, entry)
+
+		// Set last backup info from the most recent job
+		if i == 0 {
+			lastBackupTime = job.Status.StartTime
+			lastBackupStatus = entry.Status
+		}
+
+		// Track last successful backup
+		if entry.Status == backupv1alpha1.BackupStatusSuccessful && lastSuccessfulBackupTime == nil {
+			if job.Status.CompletionTime != nil {
+				lastSuccessfulBackupTime = job.Status.CompletionTime
+			} else if job.Status.StartTime != nil {
+				lastSuccessfulBackupTime = job.Status.StartTime
+			}
+		}
+
+		// Keep only the last N entries
+		if len(backupHistory) >= maxBackupHistoryEntries {
+			break
+		}
+	}
+
+	// If no jobs exist yet, set status to Pending
+	if len(relatedJobs) == 0 {
+		lastBackupStatus = backupv1alpha1.BackupStatusPending
+	}
+
+	// Update status
+	statusChanged := false
+
+	if kBackup.Status.LastBackupStatus != lastBackupStatus {
+		kBackup.Status.LastBackupStatus = lastBackupStatus
+		statusChanged = true
+	}
+
+	if !reflect.DeepEqual(kBackup.Status.LastBackupTime, lastBackupTime) {
+		kBackup.Status.LastBackupTime = lastBackupTime
+		statusChanged = true
+	}
+
+	if !reflect.DeepEqual(kBackup.Status.LastSuccessfulBackupTime, lastSuccessfulBackupTime) {
+		kBackup.Status.LastSuccessfulBackupTime = lastSuccessfulBackupTime
+		statusChanged = true
+	}
+
+	if !reflect.DeepEqual(kBackup.Status.BackupHistory, backupHistory) {
+		kBackup.Status.BackupHistory = backupHistory
+		statusChanged = true
+	}
+
+	if statusChanged {
+		if err := r.Status().Update(ctx, kBackup); err != nil {
+			return fmt.Errorf("failed to update backup status: %w", err)
+		}
+		log.Info("Updated backup status from jobs",
+			"lastBackupStatus", lastBackupStatus,
+			"lastBackupTime", lastBackupTime,
+			"lastSuccessfulBackupTime", lastSuccessfulBackupTime,
+			"historyCount", len(backupHistory),
+		)
+
+		// Record event for status changes
+		if lastBackupStatus == backupv1alpha1.BackupStatusSuccessful {
+			r.Recorder.Event(kBackup, corev1.EventTypeNormal, "BackupSucceeded", "Backup completed successfully")
+		} else if lastBackupStatus == backupv1alpha1.BackupStatusFailed {
+			r.Recorder.Event(kBackup, corev1.EventTypeWarning, "BackupFailed", "Backup failed")
+		}
+	}
+
+	return nil
+}
+
+// buildBackupHistoryEntry creates a BackupHistoryEntry from a Job
+func buildBackupHistoryEntry(job *batchv1.Job) backupv1alpha1.BackupHistoryEntry {
+	entry := backupv1alpha1.BackupHistoryEntry{
+		JobName: job.Name,
+	}
+
+	// Set start time
+	if job.Status.StartTime != nil {
+		entry.StartTime = *job.Status.StartTime
+	} else {
+		entry.StartTime = job.CreationTimestamp
+	}
+
+	// Set completion time if available
+	entry.CompletionTime = job.Status.CompletionTime
+
+	// Determine status based on job conditions and status
+	entry.Status = getJobBackupStatus(job)
+
+	// Set message based on status
+	switch entry.Status {
+	case backupv1alpha1.BackupStatusSuccessful:
+		entry.Message = fmt.Sprintf("Completed with %d succeeded pod(s)", job.Status.Succeeded)
+	case backupv1alpha1.BackupStatusFailed:
+		entry.Message = fmt.Sprintf("Failed with %d failed pod(s)", job.Status.Failed)
+		// Try to get more details from conditions
+		for _, cond := range job.Status.Conditions {
+			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+				if cond.Message != "" {
+					entry.Message = cond.Message
+				}
+				break
+			}
+		}
+	case backupv1alpha1.BackupStatusInProgress:
+		entry.Message = "Backup is currently running"
+	}
+
+	return entry
+}
+
+// getJobBackupStatus determines the backup status from a Job's status
+func getJobBackupStatus(job *batchv1.Job) backupv1alpha1.BackupStatus {
+	// Check for completion
+	for _, cond := range job.Status.Conditions {
+		if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+			return backupv1alpha1.BackupStatusSuccessful
+		}
+		if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+			return backupv1alpha1.BackupStatusFailed
+		}
+	}
+
+	// If not complete and not failed, it's in progress
+	if job.Status.Active > 0 {
+		return backupv1alpha1.BackupStatusInProgress
+	}
+
+	// If job was created but no pods started yet, consider it in progress
+	if job.Status.Active == 0 && job.Status.Succeeded == 0 && job.Status.Failed == 0 {
+		return backupv1alpha1.BackupStatusInProgress
+	}
+
+	// Fallback
+	if job.Status.Succeeded > 0 {
+		return backupv1alpha1.BackupStatusSuccessful
+	}
+	if job.Status.Failed > 0 {
+		return backupv1alpha1.BackupStatusFailed
+	}
+
+	return backupv1alpha1.BackupStatusInProgress
 }
 
 func handlePVCRequest(
@@ -835,8 +1042,8 @@ func constructCronJob(
 			ConcurrencyPolicy:          batchv1.ForbidConcurrent,
 			Schedule:                   backup.Spec.Schedule,
 			Suspend:                    &backup.Spec.Suspend,
-			SuccessfulJobsHistoryLimit: func(i int32) *int32 { return &i }(1),
-			FailedJobsHistoryLimit:     func(i int32) *int32 { return &i }(1),
+			SuccessfulJobsHistoryLimit: func(i int32) *int32 { return &i }(maxBackupHistoryEntries),
+			FailedJobsHistoryLimit:     func(i int32) *int32 { return &i }(maxBackupHistoryEntries),
 			JobTemplate: batchv1.JobTemplateSpec{
 				Spec: batchv1.JobSpec{
 					Template: corev1.PodTemplateSpec{
@@ -1064,6 +1271,43 @@ func (r *KopiaBackupReconciler) findObjectsForPod(ctx context.Context, pod clien
 	return requests
 }
 
+func (r *KopiaBackupReconciler) findBackupForJob(ctx context.Context, job client.Object) []reconcile.Request {
+	// Find the KopiaBackup that owns the CronJob that created this Job
+	// Job names from CronJobs follow the pattern: <cronjob-name>-<timestamp>
+	// CronJob names follow the pattern: snapshot-<pvc-name>
+
+	jobName := job.GetName()
+
+	// Jobs created by our CronJobs start with "snapshot-"
+	if !strings.HasPrefix(jobName, "snapshot-") {
+		return []reconcile.Request{}
+	}
+
+	// List all KopiaBackups in the same namespace
+	backupList := &backupv1alpha1.KopiaBackupList{}
+	if err := r.List(ctx, backupList, client.InNamespace(job.GetNamespace())); err != nil {
+		r.Log.Error(err, "unable to list KopiaBackups for job")
+		return []reconcile.Request{}
+	}
+
+	var requests []reconcile.Request
+	for _, backup := range backupList.Items {
+		cronJobName := getCronJobNameFromPVCName(backup.Spec.PVCName)
+		// Check if job name starts with the expected cronjob name
+		if strings.HasPrefix(jobName, cronJobName+"-") {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      backup.GetName(),
+					Namespace: backup.GetNamespace(),
+				},
+			})
+			break // Each job belongs to only one CronJob/KopiaBackup
+		}
+	}
+
+	return requests
+}
+
 func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &backupv1alpha1.KopiaBackup{}, pvcNameField, func(rawObj client.Object) []string {
 		// Extract the PVC Name from the KopiaBackup object, if it is set
@@ -1097,6 +1341,11 @@ func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.findObjectsForPod),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Watches(
+			&batchv1.Job{},
+			handler.EnqueueRequestsFromMapFunc(r.findBackupForJob),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)

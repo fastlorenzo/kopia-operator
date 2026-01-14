@@ -487,14 +487,60 @@ func (m *KopiaServerManager) constructStorageVolume(repo *backupv1alpha1.KopiaRe
 	return volume
 }
 
+// buildCacheFlags generates Kopia cache configuration flags from repository spec
+func buildCacheFlags(caching backupv1alpha1.KopiaRepositoryCachingSpec) string {
+	flags := ""
+
+	if caching.CacheDirectory != "" {
+		flags += fmt.Sprintf(" --cache-directory=%s", caching.CacheDirectory)
+	}
+
+	if caching.ContentCacheSizeBytes > 0 {
+		flags += fmt.Sprintf(" --content-cache-size-mb=%d", caching.ContentCacheSizeBytes/(1024*1024))
+	}
+
+	if caching.ContentCacheSizeLimitBytes > 0 {
+		flags += fmt.Sprintf(" --content-cache-size-limit-mb=%d", caching.ContentCacheSizeLimitBytes/(1024*1024))
+	}
+
+	if caching.MetadataCacheSizeBytes > 0 {
+		flags += fmt.Sprintf(" --metadata-cache-size-mb=%d", caching.MetadataCacheSizeBytes/(1024*1024))
+	}
+
+	if caching.MetadataCacheSizeLimitBytes > 0 {
+		flags += fmt.Sprintf(" --metadata-cache-size-limit-mb=%d", caching.MetadataCacheSizeLimitBytes/(1024*1024))
+	}
+
+	if caching.MaxListCacheDuration > 0 {
+		flags += fmt.Sprintf(" --max-list-cache-duration=%ds", caching.MaxListCacheDuration)
+	}
+
+	if caching.MinMetadataSweepAge > 0 {
+		flags += fmt.Sprintf(" --min-metadata-sweep-age=%ds", caching.MinMetadataSweepAge)
+	}
+
+	if caching.MinContentSweepAge > 0 {
+		flags += fmt.Sprintf(" --min-content-sweep-age=%ds", caching.MinContentSweepAge)
+	}
+
+	if caching.MinIndexSweepAge > 0 {
+		flags += fmt.Sprintf(" --min-index-sweep-age=%ds", caching.MinIndexSweepAge)
+	}
+
+	return flags
+}
+
 // constructServerCommand builds the command to start the Kopia Server
 func (m *KopiaServerManager) constructServerCommand(repo *backupv1alpha1.KopiaRepository) string {
+	// Build cache flags from repository spec
+	cacheFlags := buildCacheFlags(repo.Spec.Caching)
+
 	// Build repository connection string based on storage type
 	var repoConnect string
 	switch repo.Spec.StorageType {
 	case storageTypeFilesystem:
-		repoConnect = fmt.Sprintf("kopia repository connect filesystem --path=/repository --override-hostname=%s --override-username=%s",
-			repo.Spec.Hostname, repo.Spec.Username)
+		repoConnect = fmt.Sprintf("kopia repository connect filesystem --path=/repository --override-hostname=%s --override-username=%s%s",
+			repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
 	case storageTypeSFTP:
 		// Build SFTP connection command using direct configuration
 		port := 22
@@ -557,9 +603,9 @@ SFTP_CMD="$SFTP_CMD --external-ssh --ssh-command=%s"
 
 		// Add override flags and execute
 		repoConnect += fmt.Sprintf(`
-SFTP_CMD="$SFTP_CMD --override-hostname=%s --override-username=%s"
+SFTP_CMD="$SFTP_CMD --override-hostname=%s --override-username=%s%s"
 eval "$SFTP_CMD"
-`, repo.Spec.Hostname, repo.Spec.Username)
+`, repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
 	default:
 		repoConnect = fmt.Sprintf("echo 'Unsupported storage type: %s' && exit 1", repo.Spec.StorageType)
 	}
@@ -599,13 +645,13 @@ set -e
 echo "Connecting to repository..."
 %s || {
   echo "Repository connection failed, attempting to create..."
-  kopia repository create filesystem --path=/repository --override-hostname=%s --override-username=%s
+  kopia repository create filesystem --path=/repository --override-hostname=%s --override-username=%s%s
 }
 echo "Setting up admin user..."
 %s
 echo "Starting Kopia Server..."
 %s
-`, repoConnect, repo.Spec.Hostname, repo.Spec.Username, adminUserSetup, serverStart)
+`, repoConnect, repo.Spec.Hostname, repo.Spec.Username, cacheFlags, adminUserSetup, serverStart)
 	case storageTypeSFTP:
 		// For SFTP, support auto-creation
 		port := 22
@@ -646,8 +692,8 @@ fi
 		}
 
 		// Add override flags to create command
-		createCmd += fmt.Sprintf(`SFTP_CREATE_CMD="$SFTP_CREATE_CMD --override-hostname=%s --override-username=%s"
-`, repo.Spec.Hostname, repo.Spec.Username)
+		createCmd += fmt.Sprintf(`SFTP_CREATE_CMD="$SFTP_CREATE_CMD --override-hostname=%s --override-username=%s%s"
+`, repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
 
 		cmd = fmt.Sprintf(`
 echo "Connecting to repository..."

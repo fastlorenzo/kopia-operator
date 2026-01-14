@@ -129,6 +129,7 @@ func main() {
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
 		RestConfig: mgr.GetConfig(),
+		Recorder:   mgr.GetEventRecorderFor("kopiabackup-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KopiaBackup")
 		os.Exit(1)

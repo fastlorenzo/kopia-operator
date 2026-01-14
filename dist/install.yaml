@@ -75,6 +75,41 @@ spec:
             properties:
               active:
                 type: boolean
+              backupHistory:
+                description: History of the last 10 backup executions
+                items:
+                  description: BackupHistoryEntry represents a single backup execution
+                    record
+                  properties:
+                    completionTime:
+                      description: Timestamp of when the backup completed (nil if
+                        still running)
+                      format: date-time
+                      type: string
+                    jobName:
+                      description: Name of the Job that executed this backup
+                      type: string
+                    message:
+                      description: Message providing additional details about the
+                        backup status
+                      type: string
+                    startTime:
+                      description: Timestamp of when the backup was started
+                      format: date-time
+                      type: string
+                    status:
+                      description: Status of the backup (Successful, Failed, InProgress)
+                      enum:
+                      - Successful
+                      - Failed
+                      - Pending
+                      - InProgress
+                      type: string
+                  required:
+                  - startTime
+                  - status
+                  type: object
+                type: array
               conditions:
                 description: Conditions represent the latest available observations
                   of the backup's state
@@ -151,7 +186,21 @@ spec:
                 type: boolean
               fromAnnotation:
                 type: boolean
+              lastBackupStatus:
+                description: Status of the last backup (Successful, Failed, Pending,
+                  InProgress)
+                enum:
+                - Successful
+                - Failed
+                - Pending
+                - InProgress
+                type: string
               lastBackupTime:
+                description: Timestamp of the last backup attempt (regardless of success
+                  or failure)
+                format: date-time
+                type: string
+              lastSuccessfulBackupTime:
                 description: Timestamp of the last successful backup
                 format: date-time
                 type: string
@@ -777,6 +826,13 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
   - persistentvolumeclaims
   verbs:
   - get
@@ -895,6 +951,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - get
+  - list
   - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
