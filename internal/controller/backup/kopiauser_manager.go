@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -135,8 +136,14 @@ func (m *KopiaUserManager) EnsureUser(
 
 		// Create the user on the Kopia server
 		if err := m.createUserOnServer(ctx, repo, username, password); err != nil {
-			m.Log.Error(err, "Failed to create user on Kopia server, will retry")
-			// Don't fail - the user will be created by the init container if needed
+			// If server is not ready, return error to trigger requeue
+			var serverNotReady *ServerNotReadyError
+			if errors.As(err, &serverNotReady) {
+				m.Log.Info("Server not ready, will requeue", "error", err.Error())
+				return "", err
+			}
+			// For other errors, log but don't fail - user might already exist
+			m.Log.Error(err, "Failed to create user on Kopia server")
 		}
 
 		return secretName, nil
@@ -151,8 +158,14 @@ func (m *KopiaUserManager) EnsureUser(
 
 	// Ensure user exists on server
 	if err := m.createUserOnServer(ctx, repo, existingUsername, existingPassword); err != nil {
+		// If server is not ready, return error to trigger requeue
+		var serverNotReady *ServerNotReadyError
+		if errors.As(err, &serverNotReady) {
+			m.Log.Info("Server not ready, will requeue", "error", err.Error())
+			return "", err
+		}
+		// For other errors, log but don't fail - user might already exist
 		m.Log.Error(err, "Failed to ensure user on Kopia server")
-		// Don't fail - the user might already exist
 	}
 
 	return secretName, nil
@@ -254,27 +267,53 @@ func (m *KopiaUserManager) createUserOnServer(
 		return fmt.Errorf("failed to find server pod: %w", err)
 	}
 
-	// Get admin password for server authentication
-	adminPassword, err := m.getServerAdminPassword(ctx, repo)
-	if err != nil {
-		return fmt.Errorf("failed to get admin password: %w", err)
-	}
+	// Note: `kopia server user add` is a LOCAL server management command that operates
+	// on the repository directly. It does NOT require KOPIA_SERVER_USERNAME/PASSWORD
+	// (those are for client connections). The server pod already has KOPIA_PASSWORD
+	// set as an environment variable for repository access.
+	//
+	// By default (without explicit ACLs), Kopia grants authenticated users the ability to:
+	// - read and write their own snapshots (username@hostname:/path)
+	// - read and write their own policies
+	// - write content to the repository
 
 	// Build the command to create the user
+	// The server pod already has KOPIA_PASSWORD set from the repository password secret
 	cmd := []string{
 		"/bin/sh",
 		"-c",
 		fmt.Sprintf(`
-			# Set admin credentials
-			export KOPIA_SERVER_USERNAME=admin
-			export KOPIA_SERVER_PASSWORD='%s'
+			set -e
+			# kopia server user add/set are local management commands that use
+			# the repository config and KOPIA_PASSWORD (already set in the container)
 
-			# Create the user (this will fail if user already exists, which is okay)
-			kopia server user add '%s' --user-password='%s' 2>&1 || echo "User may already exist"
+			USERNAME='%s'
+			PASSWORD='%s'
 
-			# Set ACLs for the user
-			kopia server user set '%s' --set-access=FULL 2>&1 || true
-		`, adminPassword, username, password, username),
+			echo "Checking if user $USERNAME exists..."
+			USER_LIST=$(kopia server user list 2>&1) || true
+			echo "Current users: $USER_LIST"
+
+			# Use grep with fixed string (-F) to avoid regex interpretation of @
+			if echo "$USER_LIST" | grep -qF "$USERNAME"; then
+				echo "User $USERNAME already exists, updating password..."
+				kopia server user set "$USERNAME" --user-password="$PASSWORD" 2>&1
+				echo "Password updated for user $USERNAME"
+			else
+				echo "Creating user: $USERNAME"
+				kopia server user add "$USERNAME" --user-password="$PASSWORD" 2>&1
+				echo "User $USERNAME created successfully"
+			fi
+
+			# Refresh server to apply credential changes immediately
+			# This uses the server control API via localhost
+			echo "Refreshing server to apply changes..."
+			kopia server refresh --server-control-username=admin --server-control-password="${KOPIA_SERVER_PASSWORD}" --address=https://127.0.0.1:51515 --server-cert-fingerprint="%s" 2>&1 || echo "Server refresh failed (may need manual refresh)"
+
+			# Verify user exists after operation
+			echo "Final user list:"
+			kopia server user list 2>&1
+		`, username, password, repo.Status.TLSCertFingerprint),
 	}
 
 	// Execute the command in the server pod
@@ -313,24 +352,20 @@ func (m *KopiaUserManager) deleteUserFromServer(
 		return fmt.Errorf("failed to find server pod: %w", err)
 	}
 
-	// Get admin password for server authentication
-	adminPassword, err := m.getServerAdminPassword(ctx, repo)
-	if err != nil {
-		return fmt.Errorf("failed to get admin password: %w", err)
-	}
+	// Note: `kopia server user delete` is a LOCAL server management command that operates
+	// on the repository directly. The server pod already has KOPIA_PASSWORD set.
 
 	// Build the command to delete the user
 	cmd := []string{
 		"/bin/sh",
 		"-c",
 		fmt.Sprintf(`
-			# Set admin credentials
-			export KOPIA_SERVER_USERNAME=admin
-			export KOPIA_SERVER_PASSWORD='%s'
+			# kopia server user delete is a local management command that uses
+			# the repository config and KOPIA_PASSWORD (already set in the container)
 
 			# Delete the user (ignore errors if user doesn't exist)
 			kopia server user delete '%s' 2>&1 || echo "User may not exist"
-		`, adminPassword, username),
+		`, username),
 	}
 
 	// Execute the command in the server pod
@@ -392,43 +427,6 @@ func (m *KopiaUserManager) getServerPodName(ctx context.Context, repo *backupv1a
 	return "", &ServerNotReadyError{
 		Message: fmt.Sprintf("kopia-server container not ready yet for repository %s in namespace %s", repo.Name, repo.Namespace),
 	}
-}
-
-// getServerAdminPassword retrieves the admin password for the Kopia server
-func (m *KopiaUserManager) getServerAdminPassword(ctx context.Context, repo *backupv1alpha1.KopiaRepository) (string, error) {
-	var secretName string
-	var secretKey string
-
-	if repo.Spec.Server.ServerAdminPasswordExistingSecret != "" {
-		// Parse the existing secret reference in format "secretname/key"
-		parts := strings.SplitN(repo.Spec.Server.ServerAdminPasswordExistingSecret, "/", 2)
-		secretName = parts[0]
-		if len(parts) > 1 {
-			secretKey = parts[1]
-		} else {
-			secretKey = "password"
-		}
-	} else {
-		// Use auto-generated secret
-		secretName = fmt.Sprintf("kopia-server-admin-%s", repo.Name)
-		secretKey = "password"
-	}
-
-	secret := &corev1.Secret{}
-	err := m.Client.Get(ctx, types.NamespacedName{
-		Name:      secretName,
-		Namespace: repo.Namespace,
-	}, secret)
-	if err != nil {
-		return "", fmt.Errorf("failed to get admin password secret: %w", err)
-	}
-
-	password, ok := secret.Data[secretKey]
-	if !ok {
-		return "", fmt.Errorf("password key %s not found in secret %s", secretKey, secretName)
-	}
-
-	return string(password), nil
 }
 
 // execInPod executes a command in a pod and returns stdout, stderr, and error

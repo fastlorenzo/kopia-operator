@@ -617,11 +617,8 @@ func constructCronJob(
 	var kopiaCacheDirectory = repo.Spec.Caching.CacheDirectory
 	var kopiaLogDir = filepath.Join(repo.Spec.FileSystemOptions.Path, ".kopia", "logs")
 
+	// Base env vars - KOPIA_CACHE_DIRECTORY will be set differently for server vs direct mode
 	var envVars = []corev1.EnvVar{
-		{
-			Name:  "KOPIA_CACHE_DIRECTORY",
-			Value: kopiaCacheDirectory,
-		},
 		{
 			Name:  "KOPIA_LOG_DIR",
 			Value: kopiaLogDir,
@@ -685,6 +682,8 @@ func constructCronJob(
 		}
 
 		// Add kopia cache volume (emptyDir)
+		// Mount at /cache and use /cache/kopia as the actual cache directory
+		// This allows kopia to delete the cache subdirectory on disconnect
 		volumes = append(volumes, corev1.Volume{
 			Name: "kopia-cache",
 			VolumeSource: corev1.VolumeSource{
@@ -696,10 +695,23 @@ func constructCronJob(
 
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      "kopia-cache",
-			MountPath: kopiaCacheDirectory,
+			MountPath: "/cache",
+		})
+
+		// Override the cache directory to use a subdirectory of the mount
+		// so kopia can delete it on disconnect without hitting "device busy"
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "KOPIA_CACHE_DIRECTORY",
+			Value: "/cache/kopia",
 		})
 	} else {
 		// Direct mode - existing behavior
+		// Set cache directory from repo spec
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "KOPIA_CACHE_DIRECTORY",
+			Value: kopiaCacheDirectory,
+		})
+
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      "config",
 			MountPath: "/config/repository.config",
