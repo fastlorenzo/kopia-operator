@@ -84,3 +84,5 @@
 - test/utils/utils.go
 
 **Priority**: Medium
+
+- add possibility to set retention policies on each backup
