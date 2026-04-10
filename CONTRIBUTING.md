@@ -10,7 +10,7 @@ Please be respectful and constructive in all interactions. We're building an inc
 
 ### Prerequisites
 
-- Go 1.21+
+- Go 1.24+
 - Docker
 - kubectl
 - Access to a Kubernetes cluster (kind, minikube, or remote)
@@ -48,6 +48,9 @@ Please be respectful and constructive in all interactions. We're building an inc
 ```bash
 # Run unit tests
 make test
+
+# Run unit tests without webhooks (useful for local development without cert-manager)
+ENABLE_WEBHOOKS=false make test
 
 # Run end-to-end tests (requires a running cluster)
 make test-e2e

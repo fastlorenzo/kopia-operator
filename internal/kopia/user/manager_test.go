@@ -288,7 +288,7 @@ var _ = Describe("DeleteUser", func() {
 		createTestNamespace(ctx, ns)
 	})
 
-	It("deletes the secret even if server exec fails", func() {
+	It("returns error when server exec fails, keeping the secret", func() {
 		executor := failExecutor(fmt.Errorf("server down"))
 		mgr := newTestManager(executor)
 
@@ -310,11 +310,12 @@ var _ = Describe("DeleteUser", func() {
 		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
 
 		err := mgr.DeleteUser(ctx, backup, repo)
-		Expect(err).NotTo(HaveOccurred())
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("server down"))
 
-		// Secret should be deleted
+		// Secret should still exist so cleanup can be retried
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secret.Name, Namespace: ns}, &corev1.Secret{})).
-			NotTo(Succeed())
+			To(Succeed())
 	})
 
 	It("succeeds when secret does not exist", func() {

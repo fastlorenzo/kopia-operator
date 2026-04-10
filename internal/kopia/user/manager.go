@@ -162,7 +162,7 @@ func (m *KopiaUserManager) DeleteUser(
 	logger.Info("Deleting Kopia user", "username", username, "backup", backup.Name)
 
 	if err := m.deleteUserFromServer(ctx, repo, username); err != nil {
-		logger.Error(err, "Failed to delete user from Kopia server")
+		return fmt.Errorf("failed to delete user from Kopia server: %w", err)
 	}
 
 	secret := &corev1.Secret{}
@@ -206,8 +206,9 @@ func (m *KopiaUserManager) createUserOnServer(
 	cmd := buildCreateUserCommand(username, password, repo.Status.TLSCertFingerprint)
 
 	stdout, stderr, err := m.podExecutor(ctx, repo.Namespace, podName, "kopia-server", cmd)
+	redact := newRedactor(password)
 	if err != nil {
-		logger.Error(err, "Failed to create user on server", "stdout", stdout, "stderr", stderr, "username", username)
+		logger.Error(err, "Failed to create user on server", "stdout", redact(stdout), "stderr", redact(stderr), "username", username)
 		if strings.Contains(err.Error(), "container not found") ||
 			strings.Contains(err.Error(), "unable to upgrade connection") {
 			return &kopia.ServerNotReadyError{
@@ -217,7 +218,7 @@ func (m *KopiaUserManager) createUserOnServer(
 		return fmt.Errorf("failed to execute user creation command: %w", err)
 	}
 
-	logger.Info("Created user on Kopia server", "username", username, "stdout", stdout)
+	logger.Info("Created user on Kopia server", "username", username, "stdout", redact(stdout))
 	return nil
 }
 
@@ -341,5 +342,18 @@ func buildDeleteUserCommand(username string) []string {
 		"/bin/sh", "-c",
 		`kopia server user delete "$1" 2>&1 || echo "User may not exist"`,
 		"_", username,
+	}
+}
+
+// newRedactor returns a function that replaces all occurrences of sensitive
+// values with "[REDACTED]". Empty secrets are ignored.
+func newRedactor(secrets ...string) func(string) string {
+	return func(s string) string {
+		for _, sec := range secrets {
+			if sec != "" {
+				s = strings.ReplaceAll(s, sec, "[REDACTED]")
+			}
+		}
+		return s
 	}
 }
