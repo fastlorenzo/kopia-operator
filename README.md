@@ -11,6 +11,40 @@ The operator also watches for Kopia backup CRs to plan and execute backup operat
 This project is provided as-is, and might have bugs or issues. Please report them in the issues section.
 I'm not responsible for any data loss or corruption caused by using this project.
 
+## PVC Labels and Annotations
+
+### Labels
+
+| Label | Required | Description |
+|-------|----------|-------------|
+| `backup.cloudinfra.be/repository` | Yes | Name of the `KopiaRepository` CR to use for backup. When set, the operator auto-creates a `KopiaBackup` CR for this PVC. |
+
+### Annotations
+
+| Annotation | Required | Description |
+|------------|----------|-------------|
+| `backup.cloudinfra.be/schedule` | No | Cron schedule override for this PVC's backup (e.g., `0 3 * * *`). When absent, the `KopiaRepository.spec.defaultSchedule` is used. The operator syncs this annotation to `KopiaBackup.spec.schedule` on every reconcile for auto-created backups. |
+
+### Example
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: my-data
+  labels:
+    backup.cloudinfra.be/repository: sftprepo
+  annotations:
+    backup.cloudinfra.be/schedule: "0 3 * * *"  # daily at 03:00
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+```
+
+When the annotation is changed, the operator updates the `KopiaBackup` and its associated `CronJob` on the next reconcile. Removing the annotation reverts to the repository default schedule.
+
 ## Getting Started
 
 ### Prerequisites

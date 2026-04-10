@@ -45,7 +45,8 @@ import (
 )
 
 const (
-	pvcNameField = ".spec.pvcName"
+	pvcNameField          = ".spec.pvcName"
+	scheduleAnnotationKey = "backup.cloudinfra.be/schedule"
 )
 
 // KopiaBackupReconciler reconciles a KopiaBackup object
@@ -150,6 +151,20 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	log.Info("Found KopiaRepository", "repositoryName", repository.Name)
+
+	// Sync schedule from PVC annotation for auto-created backups
+	if foundPVC != nil && kBackup.Status.FromAnnotation {
+		newSchedule := getScheduleFromPVC(foundPVC, repository.Spec.DefaultSchedule)
+		if newSchedule != kBackup.Spec.Schedule {
+			log.Info("Updating KopiaBackup schedule from PVC annotation",
+				"old", kBackup.Spec.Schedule, "new", newSchedule)
+			kBackup.Spec.Schedule = newSchedule
+			if err := r.Update(ctx, &kBackup); err != nil {
+				log.Error(err, "unable to update KopiaBackup schedule")
+				return ctrl.Result{}, err
+			}
+		}
+	}
 
 	// Check if the repository configmap exists (only if backup type is filesystem)
 	if repository.Spec.StorageType == "filesystem" {
@@ -329,7 +344,7 @@ func handlePVCRequest(
 		Spec: backupv1alpha1.KopiaBackupSpec{
 			PVCName:    pvc.Name,
 			Repository: repository.Name,
-			Schedule:   repository.Spec.DefaultSchedule,
+			Schedule:   getScheduleFromPVC(pvc, repository.Spec.DefaultSchedule),
 		},
 	}
 
@@ -841,6 +856,17 @@ func getKopiaRepositoryByName(
 
 	log.Info("Found KopiaRepository", "repositoryName", repository.Name, "repositoryNamespace", repository.Namespace)
 	return repository, nil
+}
+
+// getScheduleFromPVC reads the backup schedule annotation from a PVC,
+// falling back to defaultSchedule when the annotation is absent.
+func getScheduleFromPVC(pvc *corev1.PersistentVolumeClaim, defaultSchedule string) string {
+	if pvc != nil && pvc.Annotations != nil {
+		if schedule, ok := pvc.Annotations[scheduleAnnotationKey]; ok && schedule != "" {
+			return schedule
+		}
+	}
+	return defaultSchedule
 }
 
 func (r *KopiaBackupReconciler) findObjectsForPVC(ctx context.Context, pvc client.Object) []reconcile.Request {

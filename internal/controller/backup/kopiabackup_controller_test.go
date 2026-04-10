@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -79,6 +80,52 @@ var _ = Describe("KopiaBackup Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		})
+	})
+
+	Context("getScheduleFromPVC", func() {
+		const defaultSchedule = "0 3/6 * * *"
+
+		It("should return the annotation schedule when present", func() {
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						scheduleAnnotationKey: "0 3 * * *",
+					},
+				},
+			}
+			Expect(getScheduleFromPVC(pvc, defaultSchedule)).To(Equal("0 3 * * *"))
+		})
+
+		It("should return the default schedule when annotation is absent", func() {
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{},
+			}
+			Expect(getScheduleFromPVC(pvc, defaultSchedule)).To(Equal(defaultSchedule))
+		})
+
+		It("should return the default schedule when annotation is empty", func() {
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						scheduleAnnotationKey: "",
+					},
+				},
+			}
+			Expect(getScheduleFromPVC(pvc, defaultSchedule)).To(Equal(defaultSchedule))
+		})
+
+		It("should return the default schedule when PVC is nil", func() {
+			Expect(getScheduleFromPVC(nil, defaultSchedule)).To(Equal(defaultSchedule))
+		})
+
+		It("should return the default schedule when annotations map is nil", func() {
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: nil,
+				},
+			}
+			Expect(getScheduleFromPVC(pvc, defaultSchedule)).To(Equal(defaultSchedule))
 		})
 	})
 })
