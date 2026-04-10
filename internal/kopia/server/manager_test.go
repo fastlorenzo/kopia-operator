@@ -1,6 +1,10 @@
 package server
 
 import (
+	"crypto/x509"
+	"encoding/pem"
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -201,6 +205,35 @@ var _ = Describe("Server Manager Helpers", func() {
 			Expect(keyPEM).NotTo(BeEmpty())
 			Expect(string(certPEM)).To(ContainSubstring("BEGIN CERTIFICATE"))
 			Expect(string(keyPEM)).To(ContainSubstring("BEGIN"))
+		})
+
+		It("should generate a certificate valid for 1 year", func() {
+			certPEM, _, err := generateSelfSignedCert("test.local", []string{"test.local"})
+			Expect(err).NotTo(HaveOccurred())
+
+			block, _ := pem.Decode(certPEM)
+			Expect(block).NotTo(BeNil())
+			cert, err := x509.ParseCertificate(block.Bytes)
+			Expect(err).NotTo(HaveOccurred())
+
+			validity := cert.NotAfter.Sub(cert.NotBefore)
+			Expect(validity).To(BeNumerically("~", 365*24*time.Hour, time.Hour))
+		})
+	})
+
+	Context("certNeedsRotation", func() {
+		It("should return false for a freshly generated cert", func() {
+			certPEM, _, err := generateSelfSignedCert("test.local", []string{"test.local"})
+			Expect(err).NotTo(HaveOccurred())
+
+			needsRotation, _ := certNeedsRotation(certPEM, 30*24*time.Hour)
+			Expect(needsRotation).To(BeFalse())
+		})
+
+		It("should return true for invalid PEM data", func() {
+			needsRotation, reason := certNeedsRotation([]byte("not-a-cert"), 30*24*time.Hour)
+			Expect(needsRotation).To(BeTrue())
+			Expect(reason).To(ContainSubstring("invalid PEM"))
 		})
 	})
 

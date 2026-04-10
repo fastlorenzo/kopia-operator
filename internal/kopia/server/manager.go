@@ -582,17 +582,27 @@ func (m *KopiaServerManager) EnsureTLSSecret(
 			logger.Info("Using user-provided TLS secret", "name", tlsSecretName, "fingerprint", fingerprint)
 			return fingerprint, nil
 		}
-		if fingerprint, ok := secret.Data["fingerprint"]; ok {
-			return string(fingerprint), nil
-		}
-		fingerprint, err := calculateCertFingerprint(secret.Data["tls.crt"])
-		if err != nil {
-			return "", fmt.Errorf("failed to calculate fingerprint: %w", err)
-		}
-		return fingerprint, nil
-	}
 
-	if !apierrors.IsNotFound(err) {
+		// Check if auto-generated cert needs rotation (expires within 30 days)
+		if certPEM, ok := secret.Data["tls.crt"]; ok {
+			if needsRotation, reason := certNeedsRotation(certPEM, 30*24*time.Hour); needsRotation {
+				logger.Info("Rotating TLS certificate", "name", tlsSecretName, "reason", reason)
+				if err := m.Client.Delete(ctx, secret); err != nil {
+					return "", fmt.Errorf("failed to delete expiring TLS secret: %w", err)
+				}
+				// Fall through to regeneration below
+			} else {
+				if fingerprint, ok := secret.Data["fingerprint"]; ok {
+					return string(fingerprint), nil
+				}
+				fingerprint, err := calculateCertFingerprint(certPEM)
+				if err != nil {
+					return "", fmt.Errorf("failed to calculate fingerprint: %w", err)
+				}
+				return fingerprint, nil
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
 		return "", fmt.Errorf("failed to get TLS secret %s: %w", tlsSecretName, err)
 	}
 
@@ -671,6 +681,26 @@ func calculateCertFingerprint(certPEM []byte) (string, error) {
 	return fmt.Sprintf("%X", hash), nil
 }
 
+// certNeedsRotation checks if a PEM-encoded certificate expires within the given threshold.
+func certNeedsRotation(certPEM []byte, renewBefore time.Duration) (bool, string) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return true, "invalid PEM data"
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return true, fmt.Sprintf("failed to parse certificate: %v", err)
+	}
+	remaining := time.Until(cert.NotAfter)
+	if remaining <= 0 {
+		return true, "certificate has expired"
+	}
+	if remaining < renewBefore {
+		return true, fmt.Sprintf("certificate expires in %s (threshold: %s)", remaining.Round(time.Hour), renewBefore)
+	}
+	return false, ""
+}
+
 // generateSelfSignedCert generates a self-signed TLS certificate.
 func generateSelfSignedCert(commonName string, dnsNames []string) ([]byte, []byte, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -684,7 +714,7 @@ func generateSelfSignedCert(commonName string, dnsNames []string) ([]byte, []byt
 	}
 
 	notBefore := time.Now()
-	notAfter := notBefore.Add(365 * 24 * time.Hour * 10)
+	notAfter := notBefore.Add(365 * 24 * time.Hour)
 
 	allDNSNames := append([]string{"localhost"}, dnsNames...)
 
