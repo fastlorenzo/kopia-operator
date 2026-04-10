@@ -27,12 +27,17 @@ import (
 	"github.com/fastlorenzo/kopia-operator/internal/naming"
 )
 
+// PodExecutor is a function type for executing commands in pods.
+// It can be overridden in tests to avoid needing a real cluster.
+type PodExecutor func(ctx context.Context, namespace, podName, containerName string, cmd []string) (string, string, error)
+
 // KopiaUserManager manages users on the Kopia Server.
 type KopiaUserManager struct {
-	Client     client.Client
-	Scheme     *runtime.Scheme
-	RestConfig *rest.Config
-	Clientset  *kubernetes.Clientset
+	Client      client.Client
+	Scheme      *runtime.Scheme
+	RestConfig  *rest.Config
+	Clientset   *kubernetes.Clientset
+	podExecutor PodExecutor
 }
 
 // NewKopiaUserManager creates a new KopiaUserManager.
@@ -41,12 +46,14 @@ func NewKopiaUserManager(c client.Client, s *runtime.Scheme, restConfig *rest.Co
 	if err != nil {
 		return nil, fmt.Errorf("failed to create clientset: %w", err)
 	}
-	return &KopiaUserManager{
+	mgr := &KopiaUserManager{
 		Client:     c,
 		Scheme:     s,
 		RestConfig: restConfig,
 		Clientset:  clientset,
-	}, nil
+	}
+	mgr.podExecutor = mgr.execInPod
+	return mgr, nil
 }
 
 // EnsureUser ensures a user exists for the backup on the Kopia Server.
@@ -190,7 +197,7 @@ func (m *KopiaUserManager) createUserOnServer(
 
 	cmd := buildCreateUserCommand(username, password, repo.Status.TLSCertFingerprint)
 
-	stdout, stderr, err := m.execInPod(ctx, repo.Namespace, podName, "kopia-server", cmd)
+	stdout, stderr, err := m.podExecutor(ctx, repo.Namespace, podName, "kopia-server", cmd)
 	if err != nil {
 		logger.Error(err, "Failed to create user on server", "stdout", stdout, "stderr", stderr, "username", username)
 		if strings.Contains(err.Error(), "container not found") ||
@@ -221,7 +228,7 @@ func (m *KopiaUserManager) deleteUserFromServer(
 
 	cmd := buildDeleteUserCommand(username)
 
-	stdout, stderr, err := m.execInPod(ctx, repo.Namespace, podName, "kopia-server", cmd)
+	stdout, stderr, err := m.podExecutor(ctx, repo.Namespace, podName, "kopia-server", cmd)
 	if err != nil {
 		logger.Error(err, "Failed to delete user from server", "stdout", stdout, "stderr", stderr, "username", username)
 		return fmt.Errorf("failed to execute user deletion command: %w", err)

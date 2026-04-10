@@ -1,11 +1,88 @@
 package user
 
 import (
+	"context"
+	"errors"
+	"fmt"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
 
+	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 	"github.com/fastlorenzo/kopia-operator/internal/kopia"
+	"github.com/fastlorenzo/kopia-operator/internal/naming"
 )
+
+// newTestManager creates a KopiaUserManager wired to envtest and a mock executor.
+func newTestManager(exec PodExecutor) *KopiaUserManager {
+	return &KopiaUserManager{
+		Client:      k8sClient,
+		Scheme:      scheme.Scheme,
+		podExecutor: exec,
+	}
+}
+
+// successExecutor always succeeds.
+func successExecutor(_ context.Context, _, _, _ string, _ []string) (string, string, error) {
+	return "ok", "", nil
+}
+
+// failExecutor returns the given error.
+func failExecutor(err error) PodExecutor {
+	return func(_ context.Context, _, _, _ string, _ []string) (string, string, error) {
+		return "", "error", err
+	}
+}
+
+func createTestNamespace(ctx context.Context, name string) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	_ = k8sClient.Create(ctx, ns)
+}
+
+func testBackup(ns, name, pvc string) *backupv1alpha1.KopiaBackup {
+	return &backupv1alpha1.KopiaBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID("test-uid-" + name)},
+		Spec:       backupv1alpha1.KopiaBackupSpec{PVCName: pvc, Repository: "test-repo"},
+	}
+}
+
+func testRepo(ns, name string) *backupv1alpha1.KopiaRepository {
+	return &backupv1alpha1.KopiaRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       backupv1alpha1.KopiaRepositorySpec{Hostname: "kopia-host"},
+		Status:     backupv1alpha1.KopiaRepositoryStatus{TLSCertFingerprint: "abc123"},
+	}
+}
+
+// createServerPod creates a pod with matching labels so getServerPodName finds it.
+func createServerPod(ctx context.Context, ns, repoName string) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      naming.ServerDeploymentName(repoName),
+			Namespace: ns,
+			Labels:    naming.ServerLabels(repoName),
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:  "kopia-server",
+				Image: "kopia:test",
+			}},
+		},
+	}
+	Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+
+	// Mark pod as Running with Ready container
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:  "kopia-server",
+		Ready: true,
+	}}
+	Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+}
 
 var _ = Describe("User Manager Helpers", func() {
 	Context("generateSecurePassword", func() {
@@ -86,5 +163,168 @@ var _ = Describe("User Manager Helpers", func() {
 			Expect(script).NotTo(ContainSubstring("'; drop table users; --"))
 			Expect(cmd[4]).To(Equal("'; drop table users; --"))
 		})
+	})
+})
+
+var _ = Describe("EnsureUser", func() {
+	var (
+		ctx  context.Context
+		ns   string
+		nsID int
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		nsID++
+		ns = fmt.Sprintf("user-test-%d", nsID)
+		createTestNamespace(ctx, ns)
+	})
+
+	It("creates a secret and calls the server when no secret exists", func() {
+		var capturedCmd []string
+		executor := func(_ context.Context, _, _, _ string, cmd []string) (string, string, error) {
+			capturedCmd = cmd
+			return "ok", "", nil
+		}
+		mgr := newTestManager(executor)
+
+		backup := testBackup(ns, "b1", "my-pvc")
+		repo := testRepo(ns, "test-repo")
+		createServerPod(ctx, ns, "test-repo")
+
+		secretName, err := mgr.EnsureUser(ctx, backup, repo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(secretName).To(Equal(naming.UserSecretName(ns, "my-pvc")))
+
+		// Verify secret was created with correct keys
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, secret)).To(Succeed())
+		Expect(secret.Data).To(HaveKey("KOPIA_SERVER_USERNAME"))
+		Expect(secret.Data).To(HaveKey("KOPIA_SERVER_PASSWORD"))
+
+		// Verify the exec command was called
+		Expect(capturedCmd).NotTo(BeEmpty())
+	})
+
+	It("reuses existing secret and still calls the server", func() {
+		mgr := newTestManager(successExecutor)
+
+		backup := testBackup(ns, "b2", "existing-pvc")
+		repo := testRepo(ns, "test-repo")
+		createServerPod(ctx, ns, "test-repo")
+
+		// Pre-create secret
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      naming.UserSecretName(ns, "existing-pvc"),
+				Namespace: ns,
+			},
+			StringData: map[string]string{
+				"KOPIA_SERVER_USERNAME": "preexisting-user",
+				"KOPIA_SERVER_PASSWORD": "preexisting-pass",
+			},
+		}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+
+		secretName, err := mgr.EnsureUser(ctx, backup, repo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(secretName).To(Equal(naming.UserSecretName(ns, "existing-pvc")))
+	})
+
+	It("returns ServerNotReadyError when no server pod exists", func() {
+		mgr := newTestManager(successExecutor)
+
+		backup := testBackup(ns, "b3", "pvc3")
+		repo := testRepo(ns, "test-repo")
+		// No server pod created
+
+		_, err := mgr.EnsureUser(ctx, backup, repo)
+		Expect(err).To(HaveOccurred())
+		var snr *kopia.ServerNotReadyError
+		Expect(errors.As(err, &snr)).To(BeTrue())
+	})
+
+	It("returns ServerNotReadyError when exec fails with container not ready", func() {
+		executor := failExecutor(fmt.Errorf("container not found"))
+		mgr := newTestManager(executor)
+
+		backup := testBackup(ns, "b4", "pvc4")
+		repo := testRepo(ns, "test-repo")
+		createServerPod(ctx, ns, "test-repo")
+
+		_, err := mgr.EnsureUser(ctx, backup, repo)
+		Expect(err).To(HaveOccurred())
+		var snr *kopia.ServerNotReadyError
+		Expect(errors.As(err, &snr)).To(BeTrue())
+	})
+
+	It("returns generic error when exec fails with non-server error", func() {
+		executor := failExecutor(fmt.Errorf("network timeout"))
+		mgr := newTestManager(executor)
+
+		backup := testBackup(ns, "b5", "pvc5")
+		repo := testRepo(ns, "test-repo")
+		createServerPod(ctx, ns, "test-repo")
+
+		_, err := mgr.EnsureUser(ctx, backup, repo)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("network timeout"))
+		var snr *kopia.ServerNotReadyError
+		Expect(errors.As(err, &snr)).To(BeFalse())
+	})
+})
+
+var _ = Describe("DeleteUser", func() {
+	var (
+		ctx  context.Context
+		ns   string
+		nsID int
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		nsID++
+		ns = fmt.Sprintf("delete-test-%d", nsID)
+		createTestNamespace(ctx, ns)
+	})
+
+	It("deletes the secret even if server exec fails", func() {
+		executor := failExecutor(fmt.Errorf("server down"))
+		mgr := newTestManager(executor)
+
+		backup := testBackup(ns, "b1", "del-pvc")
+		repo := testRepo(ns, "test-repo")
+		createServerPod(ctx, ns, "test-repo")
+
+		// Pre-create the secret
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      naming.UserSecretName(ns, "del-pvc"),
+				Namespace: ns,
+			},
+			StringData: map[string]string{
+				"KOPIA_SERVER_USERNAME": "user",
+				"KOPIA_SERVER_PASSWORD": "pass",
+			},
+		}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+
+		err := mgr.DeleteUser(ctx, backup, repo)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Secret should be deleted
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secret.Name, Namespace: ns}, &corev1.Secret{})).
+			NotTo(Succeed())
+	})
+
+	It("succeeds when secret does not exist", func() {
+		mgr := newTestManager(successExecutor)
+
+		backup := testBackup(ns, "b2", "no-secret-pvc")
+		repo := testRepo(ns, "test-repo")
+		createServerPod(ctx, ns, "test-repo")
+
+		err := mgr.DeleteUser(ctx, backup, repo)
+		Expect(err).NotTo(HaveOccurred())
 	})
 })
