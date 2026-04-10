@@ -102,40 +102,127 @@ graph TD
 
 ## Component Interaction Flow
 
+### 1. Repository Lifecycle
+
 ```mermaid
-flowchart TD
-    %% 1. Repository Creation
-    R1["**1. Repository Creation**<br/>User creates KopiaRepository with server.enabled: true"]
-    R2["**KopiaRepositoryReconciler**<br/>1. Validates repository spec<br/>2. Creates admin secret (if not exists)<br/>3. Calls KopiaServerManager.EnsureServerDeployment()<br/>4. Calls KopiaServerManager.EnsureServerService()<br/>5. Calls KopiaServerManager.EnsureServerExposure()<br/>6. Waits for server readiness<br/>7. Initializes repository on server<br/>8. Updates status.serverURL"]
-    R3["**Kubernetes Resources Created:**<br/>✅ Deployment: kopia-server-repo-name<br/>✅ Service: kopia-server-repo-name<br/>✅ Ingress/HTTPRoute: kopia-server-repo-name<br/>✅ ConfigMap: kopia-config-repo-name (optional)<br/>✅ Secret: repo-name-tls (if auto-generated)"]
+sequenceDiagram
+    actor User
+    participant API as Kubernetes API
+    participant RR as KopiaRepository<br/>Reconciler
+    participant SM as KopiaServer<br/>Manager
+    participant K8s as Kubernetes<br/>Resources
 
-    R1 --> R2 --> R3
+    User->>API: Create KopiaRepository<br/>(server.enabled: true)
+    API-->>RR: Reconcile event
 
-    %% 2. Backup Creation
-    B1["**2. Backup Creation**<br/>User creates KopiaBackup"]
-    B2["**KopiaBackupReconciler**<br/>1. Validates backup spec<br/>2. Fetches referenced KopiaRepository<br/>3. Waits for repository.status.serverReady == true<br/>4. Calls KopiaUserManager.EnsureUser()<br/>&nbsp;&nbsp;&nbsp;→ Creates user on Kopia Server via API<br/>&nbsp;&nbsp;&nbsp;→ Generates secure password<br/>&nbsp;&nbsp;&nbsp;→ Stores credentials in Secret<br/>5. Discovers runtime info (node, app, pod)<br/>6. Creates/Updates CronJob with server connection<br/>7. Updates backup status"]
-    B3["**Kubernetes Resources Created:**<br/>✅ Secret: backup-name-kopia-creds<br/>&nbsp;&nbsp;- username: namespace-pvcname<br/>&nbsp;&nbsp;- password: generated-secure-password<br/>✅ CronJob: snapshot-pvcname<br/>&nbsp;&nbsp;- Env: KOPIA_SERVER_URL, USERNAME, PASSWORD<br/>&nbsp;&nbsp;- Command: kopia server login && kopia snapshot create"]
+    RR->>API: Validate repository spec
+    RR->>API: Create admin Secret<br/>(if not exists)
 
-    R3 --> B1 --> B2 --> B3
+    RR->>SM: EnsureServerDeployment()
+    SM->>K8s: Create/Update Deployment<br/>kopia-server-‹repo›
+    SM->>K8s: Create/Update ConfigMap<br/>kopia-config-‹repo›
+    SM->>K8s: Generate TLS cert → Secret<br/>‹repo›-tls
 
-    %% 3. Backup Execution
-    E1["**3. Backup Execution**<br/>CronJob triggers on schedule"]
-    E2["**Backup Pod Execution Flow**<br/>1. Init Container: Random wait (1-900s)<br/>2. Main Container:<br/>&nbsp;&nbsp;a. Read credentials from Secret<br/>&nbsp;&nbsp;b. Connect: kopia server login<br/>&nbsp;&nbsp;c. Snapshot: kopia snapshot create /data/...<br/>&nbsp;&nbsp;d. List: kopia snapshot list /data/...<br/>&nbsp;&nbsp;e. Stats: kopia content stats<br/>&nbsp;&nbsp;f. Disconnect: kopia server logout<br/>3. Pod completes successfully"]
-    E3["**Kopia Server Processes Request:**<br/>1. Authenticates user credentials<br/>2. Authorizes access to snapshot path<br/>3. Receives backup data stream<br/>4. Deduplicates and compresses data<br/>5. Writes to backend storage (NFS/SFTP)<br/>6. Logs operation with user context<br/>7. Returns success/failure to client"]
+    RR->>SM: EnsureServerService()
+    SM->>K8s: Create/Update Service<br/>ClusterIP :51515
 
-    B3 --> E1 --> E2 --> E3
+    RR->>SM: EnsureServerExposure()
+    SM->>K8s: Create Ingress/HTTPRoute<br/>(if configured)
 
-    %% 4. Backup Deletion
-    D1["**4. Backup Deletion**<br/>User deletes KopiaBackup"]
-    D2["**KopiaBackupReconciler Finalizer**<br/>1. Calls KopiaUserManager.DeleteUser()<br/>&nbsp;&nbsp;&nbsp;→ Deletes user from Kopia Server via API<br/>2. Deletes credentials Secret<br/>3. CronJob auto-deleted (owner reference)<br/>4. Removes finalizer"]
+    loop Wait for readiness
+        RR->>API: Check Deployment status
+        API-->>RR: Pods ready / not ready
+    end
 
-    E3 ~~~ D1 --> D2
+    RR->>API: Update status.serverURL<br/>Update status.serverReady = true
+    RR->>API: Set Condition: Ready=True
+```
 
-    %% 5. Repository Deletion
-    RD1["**5. Repository Deletion**<br/>User deletes KopiaRepository"]
-    RD2["**KopiaRepositoryReconciler Finalizer**<br/>1. Verifies no dependent KopiaBackups exist<br/>2. Deletes Ingress/HTTPRoute<br/>3. Deletes Service<br/>4. Deletes Deployment (Server pods terminated)<br/>5. Removes finalizer"]
+### 2. Backup Lifecycle
 
-    D2 ~~~ RD1 --> RD2
+```mermaid
+sequenceDiagram
+    actor User
+    participant API as Kubernetes API
+    participant BR as KopiaBackup<br/>Reconciler
+    participant UM as KopiaUser<br/>Manager
+    participant Server as Kopia Server<br/>Pod
+    participant K8s as Kubernetes<br/>Resources
+
+    User->>API: Create KopiaBackup<br/>(pvcName, schedule, repository)
+    API-->>BR: Reconcile event
+
+    BR->>API: Fetch KopiaRepository
+    BR->>API: Check repository.status.serverReady
+
+    rect rgb(240, 248, 255)
+        Note over BR,Server: User provisioning (server mode)
+        BR->>UM: EnsureUser(backup)
+        UM->>Server: kubectl exec:<br/>kopia server user add<br/>‹namespace›-‹pvcname›
+        Server-->>UM: User created
+        UM->>K8s: Create Secret<br/>‹backup›-kopia-creds<br/>(username + generated password)
+    end
+
+    BR->>API: List Pods mounting PVC
+    API-->>BR: Pod found → extract node, app name
+
+    BR->>K8s: Create/Update CronJob<br/>snapshot-‹pvcname›<br/>(nodeAffinity, server env vars)
+    BR->>K8s: Create/Update ConfigMap<br/>(direct mode only)
+
+    BR->>API: Set owner reference (Backup → CronJob)
+    BR->>API: Update status + Condition: Ready=True
+
+    rect rgb(255, 240, 240)
+        Note over User,K8s: Deletion flow (finalizer)
+        User->>API: Delete KopiaBackup
+        API-->>BR: Reconcile (deletionTimestamp set)
+        BR->>UM: DeleteUser(backup)
+        UM->>Server: kubectl exec:<br/>kopia server user delete
+        BR->>K8s: Delete credentials Secret
+        Note over K8s: CronJob auto-deleted<br/>via owner reference
+        BR->>API: Remove finalizer
+    end
+```
+
+### 3. Backup Execution
+
+```mermaid
+sequenceDiagram
+    participant Cron as CronJob<br/>Scheduler
+    participant Init as Init Container<br/>(wait)
+    participant Snap as Snapshot Container<br/>(kopia client)
+    participant Server as Kopia Server
+    participant Storage as External Storage<br/>(NFS / SFTP)
+
+    Cron->>Init: Trigger scheduled job
+    Note over Init: sleep random(1-900s)<br/>Prevents backup storms
+
+    Init->>Snap: Init complete, start main container
+
+    Snap->>Snap: Read credentials from<br/>mounted Secret
+
+    Snap->>Server: kopia server login<br/>--url=$KOPIA_SERVER_URL<br/>--username=$KOPIA_SERVER_USERNAME<br/>--password=$KOPIA_SERVER_PASSWORD
+    Server-->>Snap: Authenticated ✓
+
+    Snap->>Server: kopia snapshot create /data/‹ns›/‹app›/‹pvc›
+    activate Server
+    Server->>Server: Authenticate & authorize user
+    Server->>Server: Deduplicate & compress
+    Server->>Storage: Write snapshot data
+    Storage-->>Server: Write confirmed
+    Server-->>Snap: Snapshot created ✓
+    deactivate Server
+
+    Snap->>Server: kopia snapshot list /data/...
+    Server-->>Snap: Snapshot listing
+
+    Snap->>Server: kopia content stats
+    Server-->>Snap: Content statistics
+
+    Snap->>Server: kopia server logout
+    Server-->>Snap: Disconnected
+
+    Note over Snap: Pod completes successfully
 ```
 
 ## Security Architecture
