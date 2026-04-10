@@ -80,7 +80,7 @@ func (r *PVCWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// Label removed → delete auto-created backup.
 	if repoName == "" {
-		if backupExists && existingBackup.Status.AutoCreated {
+		if backupExists && (existingBackup.Status.AutoCreated || metav1.IsControlledBy(&existingBackup, &pvc)) {
 			log.Info("PVC label removed, deleting auto-created KopiaBackup", "backup", existingBackup.Name)
 			if err := r.Delete(ctx, &existingBackup); err != nil && !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, fmt.Errorf("failed to delete KopiaBackup: %w", err)
@@ -93,7 +93,15 @@ func (r *PVCWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// Label present + backup exists → sync schedule from PVC annotation.
 	if backupExists {
-		if existingBackup.Status.AutoCreated {
+		isAutoCreated := existingBackup.Status.AutoCreated || metav1.IsControlledBy(&existingBackup, &pvc)
+		// Ensure AutoCreated status is set (may have been lost if status update failed after create).
+		if isAutoCreated && !existingBackup.Status.AutoCreated {
+			existingBackup.Status.AutoCreated = true
+			if err := r.Status().Update(ctx, &existingBackup); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update KopiaBackup AutoCreated status: %w", err)
+			}
+		}
+		if isAutoCreated {
 			return r.syncSchedule(ctx, &pvc, &existingBackup, repoName)
 		}
 		return ctrl.Result{}, nil
