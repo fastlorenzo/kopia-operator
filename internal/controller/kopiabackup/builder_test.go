@@ -65,7 +65,7 @@ var _ = Describe("CronJob Builder", func() {
 	Context("buildBackupCommand", func() {
 		It("should build a direct mode command with snapshot create", func() {
 			cmd := buildBackupCommand(backup, repo, "/data")
-			Expect(cmd).To(ContainSubstring("kopia snap create /data"))
+			Expect(cmd).To(ContainSubstring("kopia snapshot create /data"))
 		})
 
 		It("should build a server mode command when server is enabled", func() {
@@ -74,7 +74,7 @@ var _ = Describe("CronJob Builder", func() {
 
 			cmd := buildBackupCommand(backup, repo, "/data")
 			Expect(cmd).To(ContainSubstring("kopia repository connect server"))
-			Expect(cmd).To(ContainSubstring("kopia snap create /data"))
+			Expect(cmd).To(ContainSubstring("kopia snapshot create /data"))
 		})
 	})
 

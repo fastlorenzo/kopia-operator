@@ -37,29 +37,43 @@ const (
 )
 
 // buildBackupCommand builds the shell command to run in the backup container.
-func buildBackupCommand(backup *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.KopiaRepository, mountPath string) string {
+func buildBackupCommand(_ *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.KopiaRepository, mountPath string) string {
 	if repo.Spec.Server.Enabled {
 		serverURL := fmt.Sprintf("https://kopia-server-%s.%s.svc.cluster.local:%d",
-			repo.Name,
-			repo.Namespace,
-			repo.Spec.Server.Exposure.ServicePort)
+			repo.Name, repo.Namespace, repo.Spec.Server.Exposure.ServicePort)
 
-		return "" +
-			"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/04] Connecting to Kopia Server...\"    && " +
-			"kopia repository connect server --url=" + serverURL + " " +
-			"--server-cert-fingerprint=\"${KOPIA_TLS_FINGERPRINT}\" " +
-			"--override-username=\"${KOPIA_SERVER_USERNAME%%@*}\" " +
-			"--override-hostname=\"${KOPIA_SERVER_USERNAME#*@}\" && " +
-			"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/04] Create snapshot ...\"          && kopia snap create " + mountPath + " && " +
-			"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[03/04] List snapshots ...\"           && kopia snap list " + mountPath + " && " +
-			"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[04/04] Disconnect repo ...\"           && kopia repo disconnect \n"
+		return fmt.Sprintf(`set -e
+echo "[1/4] Connecting to Kopia Server..."
+kopia repository connect server \
+  --url=%s \
+  --server-cert-fingerprint="${KOPIA_TLS_FINGERPRINT}" \
+  --override-username="${KOPIA_SERVER_USERNAME%%%%@*}" \
+  --override-hostname="${KOPIA_SERVER_USERNAME#*@}"
+
+echo "[2/4] Creating snapshot..."
+kopia snapshot create %s
+
+echo "[3/4] Listing snapshots..."
+kopia snapshot list %s
+
+echo "[4/4] Disconnecting repository..."
+kopia repository disconnect
+`, serverURL, mountPath, mountPath)
 	}
 
-	return "" +
-		"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[01/04] Create snapshot ...\"          && kopia snap create " + mountPath + "\n" +
-		"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[02/04] List snapshots ...\"           && kopia snap list " + mountPath + "\n" +
-		"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[03/04] Show stats ...\"               && kopia content stats \n" +
-		"printf \"\\e[1;32m%-6s\\e[m\\n\" \"[04/04] Show maintenance info ...\"      && kopia maintenance info \n"
+	return fmt.Sprintf(`set -e
+echo "[1/4] Creating snapshot..."
+kopia snapshot create %s
+
+echo "[2/4] Listing snapshots..."
+kopia snapshot list %s
+
+echo "[3/4] Showing content stats..."
+kopia content stats
+
+echo "[4/4] Showing maintenance info..."
+kopia maintenance info
+`, mountPath, mountPath)
 }
 
 // buildCronJob constructs a CronJob for the backup.

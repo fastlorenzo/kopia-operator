@@ -377,66 +377,116 @@ func BuildCacheFlags(caching backupv1alpha1.KopiaRepositoryCachingSpec) string {
 
 // constructServerCommand builds the command to start the Kopia Server.
 func (m *KopiaServerManager) constructServerCommand(repo *backupv1alpha1.KopiaRepository) string {
-	cacheFlags := BuildCacheFlags(repo.Spec.Caching)
+	var b strings.Builder
 
-	var repoConnect string
 	switch repo.Spec.StorageType {
 	case backupv1alpha1.StorageTypeFilesystem:
-		repoConnect = fmt.Sprintf(
-			"kopia repository connect filesystem --path=/repository --override-hostname=%s --override-username=%s%s",
-			repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+		m.writeFilesystemServerScript(&b, repo)
 	case backupv1alpha1.StorageTypeSFTP:
-		port := 22
-		if repo.Spec.SFTPOptions.Port > 0 {
-			port = repo.Spec.SFTPOptions.Port
-		}
-		sftpCmd := fmt.Sprintf("kopia repository connect sftp --host=%s --port=%d --path=%s",
-			repo.Spec.SFTPOptions.Host, port, repo.Spec.SFTPOptions.Path)
+		m.writeSFTPServerScript(&b, repo)
+	default:
+		fmt.Fprintf(&b, "set -e\necho \"Connecting to repository...\"\n")
+		fmt.Fprintf(&b, "echo 'Unsupported storage type: %s' && exit 1\n", repo.Spec.StorageType)
+	}
 
-		repoConnect = fmt.Sprintf(`
-SFTP_USER=$(cat /sftp-creds/username 2>/dev/null || echo "")
+	b.WriteString("\necho \"Setting up admin user...\"\n")
+	m.writeAdminUserSetup(&b, repo)
+	b.WriteString("\necho \"Starting Kopia Server...\"\n")
+	m.writeServerStartCommand(&b, repo)
+
+	return b.String()
+}
+
+// writeFilesystemServerScript writes the filesystem-mode repository connect/create script.
+func (m *KopiaServerManager) writeFilesystemServerScript(b *strings.Builder, repo *backupv1alpha1.KopiaRepository) {
+	cacheFlags := BuildCacheFlags(repo.Spec.Caching)
+
+	b.WriteString("set -e\necho \"Connecting to repository...\"\n")
+	fmt.Fprintf(b, "kopia repository connect filesystem --path=/repository --override-hostname=%s --override-username=%s%s || {\n",
+		repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+	b.WriteString("  echo \"Repository connection failed, attempting to create...\"\n")
+	fmt.Fprintf(b, "  kopia repository create filesystem --path=/repository --override-hostname=%s --override-username=%s%s\n",
+		repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+	b.WriteString("}\n")
+}
+
+// writeSFTPServerScript writes the SFTP-mode repository connect/create script.
+func (m *KopiaServerManager) writeSFTPServerScript(b *strings.Builder, repo *backupv1alpha1.KopiaRepository) {
+	cacheFlags := BuildCacheFlags(repo.Spec.Caching)
+	port := 22
+	if repo.Spec.SFTPOptions.Port > 0 {
+		port = repo.Spec.SFTPOptions.Port
+	}
+
+	b.WriteString("echo \"Connecting to repository...\"\n")
+	m.writeSFTPCredentialSetup(b, repo)
+
+	// Build the connect command
+	baseSFTPCmd := fmt.Sprintf("kopia repository connect sftp --host=%s --port=%d --path=%s",
+		repo.Spec.SFTPOptions.Host, port, repo.Spec.SFTPOptions.Path)
+	fmt.Fprintf(b, "SFTP_CMD=\"%s --username=$SFTP_USER\"\n", baseSFTPCmd)
+	m.writeSFTPAuthFlags(b, repo, "SFTP_CMD")
+	fmt.Fprintf(b, "SFTP_CMD=\"$SFTP_CMD --override-hostname=%s --override-username=%s%s\"\n",
+		repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+	b.WriteString("eval \"$SFTP_CMD\"\n")
+
+	// Build the create fallback
+	b.WriteString("if [ $? -ne 0 ]; then\n")
+	b.WriteString("  echo \"Repository connection failed, attempting to create...\"\n")
+	sftpCreateCmd := fmt.Sprintf("kopia repository create sftp --host=%s --port=%d --path=%s",
+		repo.Spec.SFTPOptions.Host, port, repo.Spec.SFTPOptions.Path)
+	fmt.Fprintf(b, "  SFTP_CREATE_CMD=\"%s --username=$SFTP_USER\"\n", sftpCreateCmd)
+	m.writeSFTPAuthFlags(b, repo, "SFTP_CREATE_CMD")
+	fmt.Fprintf(b, "  SFTP_CREATE_CMD=\"$SFTP_CREATE_CMD --override-hostname=%s --override-username=%s%s\"\n",
+		repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+	b.WriteString("  eval \"$SFTP_CREATE_CMD\"\n")
+	b.WriteString("  if [ $? -eq 0 ]; then\n")
+	b.WriteString("    echo \"Repository created successfully, reconnecting...\"\n")
+	b.WriteString("    eval \"$SFTP_CMD\"\n")
+	b.WriteString("  else\n")
+	b.WriteString("    echo \"Failed to create repository\"; exit 1\n")
+	b.WriteString("  fi\n")
+	b.WriteString("fi\n")
+	b.WriteString("set -e\n")
+}
+
+// writeSFTPCredentialSetup writes the SFTP credential loading script fragment.
+func (m *KopiaServerManager) writeSFTPCredentialSetup(b *strings.Builder, _ *backupv1alpha1.KopiaRepository) {
+	b.WriteString(`SFTP_USER=$(cat /sftp-creds/username 2>/dev/null || echo "")
 SFTP_PASSWORD=$(cat /sftp-creds/password 2>/dev/null || echo "")
 SFTP_KEY=$(cat /sftp-creds/keyData 2>/dev/null || echo "")
 if [ -z "$SFTP_USER" ]; then echo "ERROR: SFTP username not found in secret"; exit 1; fi
-SFTP_CMD="%s --username=$SFTP_USER"
-if [ -n "$SFTP_KEY" ]; then
+`)
+}
+
+// writeSFTPAuthFlags appends SFTP authentication flags to the given command variable.
+func (m *KopiaServerManager) writeSFTPAuthFlags(b *strings.Builder, repo *backupv1alpha1.KopiaRepository, cmdVar string) {
+	fmt.Fprintf(b, `if [ -n "$SFTP_KEY" ]; then
   echo "$SFTP_KEY" > /tmp/ssh_key && chmod 600 /tmp/ssh_key
-  SFTP_CMD="$SFTP_CMD --keyfile=/tmp/ssh_key"
+  %s="$%s --keyfile=/tmp/ssh_key"
 elif [ -n "$SFTP_PASSWORD" ]; then
-  SFTP_CMD="$SFTP_CMD --sftp-password=$SFTP_PASSWORD"
+  %s="$%s --sftp-password=$SFTP_PASSWORD"
 else
   echo "ERROR: Neither keyData nor password found in secret"; exit 1
-fi`, sftpCmd)
+fi
+`, cmdVar, cmdVar, cmdVar, cmdVar)
 
-		if repo.Spec.SFTPOptions.KnownHostsData != "" {
-			repoConnect += fmt.Sprintf(`
-echo "%s" > /tmp/known_hosts
-SFTP_CMD="$SFTP_CMD --known-hosts=/tmp/known_hosts"`, repo.Spec.SFTPOptions.KnownHostsData)
-		}
-		if repo.Spec.SFTPOptions.ExternalSSH {
-			sshCmd := "ssh"
-			if repo.Spec.SFTPOptions.SSHCommand != "" {
-				sshCmd = repo.Spec.SFTPOptions.SSHCommand
-			}
-			repoConnect += fmt.Sprintf(`
-SFTP_CMD="$SFTP_CMD --external-ssh --ssh-command=%s"`, sshCmd)
-		}
-		repoConnect += fmt.Sprintf(`
-SFTP_CMD="$SFTP_CMD --override-hostname=%s --override-username=%s%s"
-eval "$SFTP_CMD"`, repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
-	default:
-		repoConnect = fmt.Sprintf("echo 'Unsupported storage type: %s' && exit 1", repo.Spec.StorageType)
+	if repo.Spec.SFTPOptions.KnownHostsData != "" {
+		fmt.Fprintf(b, "echo \"%s\" > /tmp/known_hosts\n", repo.Spec.SFTPOptions.KnownHostsData)
+		fmt.Fprintf(b, "%s=\"$%s --known-hosts=/tmp/known_hosts\"\n", cmdVar, cmdVar)
 	}
-
-	serverStart := "kopia server start --tls-cert-file=/tls/tls.crt --tls-key-file=/tls/tls.key " +
-		"--address=0.0.0.0:51515 --server-control-username=admin " +
-		"--server-control-password=\"${KOPIA_SERVER_PASSWORD}\""
-	for _, arg := range repo.Spec.Server.ExtraArgs {
-		serverStart += " " + arg
+	if repo.Spec.SFTPOptions.ExternalSSH {
+		sshCmd := "ssh"
+		if repo.Spec.SFTPOptions.SSHCommand != "" {
+			sshCmd = repo.Spec.SFTPOptions.SSHCommand
+		}
+		fmt.Fprintf(b, "%s=\"$%s --external-ssh --ssh-command=%s\"\n", cmdVar, cmdVar, sshCmd)
 	}
+}
 
-	adminUserSetup := fmt.Sprintf(`
-ADMIN_USER="%s@%s"
+// writeAdminUserSetup writes the admin user creation/update script fragment.
+func (m *KopiaServerManager) writeAdminUserSetup(b *strings.Builder, repo *backupv1alpha1.KopiaRepository) {
+	fmt.Fprintf(b, `ADMIN_USER="%s@%s"
 echo "Checking admin user: $ADMIN_USER"
 set +e
 kopia server user list 2>/dev/null | grep -q "$ADMIN_USER"
@@ -448,78 +498,22 @@ if [ $USER_EXISTS -ne 0 ]; then
 else
   echo "Updating admin user password: $ADMIN_USER"
   kopia server user set "$ADMIN_USER" --user-password="${KOPIA_PASSWORD}"
-fi`, repo.Spec.Username, repo.Spec.Hostname)
-
-	switch repo.Spec.StorageType {
-	case backupv1alpha1.StorageTypeFilesystem:
-		return fmt.Sprintf(`set -e
-echo "Connecting to repository..."
-%s || {
-  echo "Repository connection failed, attempting to create..."
-  kopia repository create filesystem --path=/repository --override-hostname=%s --override-username=%s%s
-}
-echo "Setting up admin user..."
-%s
-echo "Starting Kopia Server..."
-%s`, repoConnect, repo.Spec.Hostname, repo.Spec.Username, cacheFlags, adminUserSetup, serverStart)
-
-	case backupv1alpha1.StorageTypeSFTP:
-		port := 22
-		if repo.Spec.SFTPOptions.Port > 0 {
-			port = repo.Spec.SFTPOptions.Port
-		}
-		sftpCreateCmd := fmt.Sprintf("kopia repository create sftp --host=%s --port=%d --path=%s",
-			repo.Spec.SFTPOptions.Host, port, repo.Spec.SFTPOptions.Path)
-
-		createCmd := fmt.Sprintf(`SFTP_CREATE_CMD="%s --username=$SFTP_USER"
-if [ -n "$SFTP_KEY" ]; then
-  SFTP_CREATE_CMD="$SFTP_CREATE_CMD --keyfile=/tmp/ssh_key"
-elif [ -n "$SFTP_PASSWORD" ]; then
-  SFTP_CREATE_CMD="$SFTP_CREATE_CMD --sftp-password=$SFTP_PASSWORD"
-fi`, sftpCreateCmd)
-
-		if repo.Spec.SFTPOptions.KnownHostsData != "" {
-			createCmd += `
-SFTP_CREATE_CMD="$SFTP_CREATE_CMD --known-hosts=/tmp/known_hosts"`
-		}
-		if repo.Spec.SFTPOptions.ExternalSSH {
-			sshCmd := "ssh"
-			if repo.Spec.SFTPOptions.SSHCommand != "" {
-				sshCmd = repo.Spec.SFTPOptions.SSHCommand
-			}
-			createCmd += fmt.Sprintf(`
-SFTP_CREATE_CMD="$SFTP_CREATE_CMD --external-ssh --ssh-command=%s"`, sshCmd)
-		}
-		createCmd += fmt.Sprintf(`
-SFTP_CREATE_CMD="$SFTP_CREATE_CMD --override-hostname=%s --override-username=%s%s"`,
-			repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
-
-		return fmt.Sprintf(`echo "Connecting to repository..."
-%s
-if [ $? -ne 0 ]; then
-  echo "Repository connection failed, attempting to create..."
-%s
-  eval "$SFTP_CREATE_CMD"
-  if [ $? -eq 0 ]; then
-    echo "Repository created successfully, reconnecting..."
-    eval "$SFTP_CMD"
-  else
-    echo "Failed to create repository"; exit 1
-  fi
 fi
-set -e
-echo "Starting Kopia Server..."
-%s
-%s`, repoConnect, createCmd, adminUserSetup, serverStart)
+`, repo.Spec.Username, repo.Spec.Hostname)
+}
 
-	default:
-		return fmt.Sprintf(`set -e
-echo "Connecting to repository..."
-%s
-echo "Starting Kopia Server..."
-%s
-%s`, repoConnect, adminUserSetup, serverStart)
+// writeServerStartCommand writes the kopia server start command.
+func (m *KopiaServerManager) writeServerStartCommand(b *strings.Builder, repo *backupv1alpha1.KopiaRepository) {
+	b.WriteString("kopia server start \\\n")
+	b.WriteString("  --tls-cert-file=/tls/tls.crt \\\n")
+	b.WriteString("  --tls-key-file=/tls/tls.key \\\n")
+	b.WriteString("  --address=0.0.0.0:51515 \\\n")
+	b.WriteString("  --server-control-username=admin \\\n")
+	b.WriteString("  --server-control-password=\"${KOPIA_SERVER_PASSWORD}\"")
+	for _, arg := range repo.Spec.Server.ExtraArgs {
+		fmt.Fprintf(b, " \\\n  %s", arg)
 	}
+	b.WriteString("\n")
 }
 
 // getRepositoryPasswordSecretKeyRef returns the secret key reference for the repository password.
