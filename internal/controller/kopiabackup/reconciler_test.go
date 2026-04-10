@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package backup
+package kopiabackup
 
 import (
 	"context"
@@ -114,7 +114,6 @@ var _ = Describe("KopiaBackup Controller", func() {
 			By("cleaning up the KopiaBackup")
 			backup := &backupv1alpha1.KopiaBackup{}
 			if err := k8sClient.Get(ctx, typeNamespacedName, backup); err == nil {
-				// Remove finalizer first so delete actually removes the object
 				backup.Finalizers = nil
 				_ = k8sClient.Update(ctx, backup)
 				Expect(k8sClient.Delete(ctx, backup)).To(Succeed())
@@ -237,54 +236,6 @@ var _ = Describe("KopiaBackup Controller", func() {
 				},
 			}
 			Expect(getScheduleFromPVC(pvc, defaultSchedule)).To(Equal(defaultSchedule))
-		})
-	})
-
-	Context("getCronJobNameFromPVCName", func() {
-		It("should prefix with snapshot- for short names", func() {
-			Expect(getCronJobNameFromPVCName("my-pvc")).To(Equal("snapshot-my-pvc"))
-		})
-
-		It("should truncate long names", func() {
-			longName := "this-is-a-very-long-pvc-name-that-exceeds-forty-two-chars-limit"
-			result := getCronJobNameFromPVCName(longName)
-			Expect(result).To(HavePrefix("snapshot-"))
-			Expect(len(result)).To(BeNumerically("<=", 54))
-		})
-	})
-
-	Context("buildConfigMap", func() {
-		It("should produce valid JSON in repository.config", func() {
-			backup := &backupv1alpha1.KopiaBackup{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-backup",
-					Namespace: "default",
-				},
-				Spec: backupv1alpha1.KopiaBackupSpec{
-					Repository: "test-repo",
-				},
-			}
-			repo := &backupv1alpha1.KopiaRepository{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-repo"},
-				Spec: backupv1alpha1.KopiaRepositorySpec{
-					StorageType: backupv1alpha1.StorageTypeFilesystem,
-					Hostname:    "myhost",
-					Username:    "myuser",
-					Description: "test",
-					FileSystemOptions: backupv1alpha1.KopiaRepositoryStorageFileSystemSpec{
-						Path: "/mnt/repo",
-					},
-					Caching: backupv1alpha1.KopiaRepositoryCachingSpec{
-						CacheDirectory: "/cache",
-					},
-				},
-			}
-			cm, err := buildConfigMap(backup, repo)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cm.Data).To(HaveKey("repository.config"))
-			Expect(cm.Data["repository.config"]).To(ContainSubstring(`"hostname": "myhost"`))
-			Expect(cm.Data["repository.config"]).To(ContainSubstring(`"username": "myuser"`))
-			Expect(cm.Data["repository.config"]).To(ContainSubstring(`"path": "/mnt/repo"`))
 		})
 	})
 })

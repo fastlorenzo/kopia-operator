@@ -34,7 +34,10 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
-	backupcontroller "github.com/fastlorenzo/kopia-operator/internal/controller/backup"
+	"github.com/fastlorenzo/kopia-operator/internal/controller/kopiabackup"
+	"github.com/fastlorenzo/kopia-operator/internal/controller/kopiarepository"
+	"github.com/fastlorenzo/kopia-operator/internal/kopia/server"
+	"github.com/fastlorenzo/kopia-operator/internal/kopia/user"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -104,17 +107,17 @@ func main() {
 	}
 
 	// Create shared server manager for Kopia Server mode
-	serverManager := backupcontroller.NewKopiaServerManager(mgr.GetClient(), mgr.GetScheme())
+	serverManager := server.NewKopiaServerManager(mgr.GetClient(), mgr.GetScheme())
 
 	// Create user manager for Kopia Server mode (requires REST config for kubectl exec)
 	restConfig := ctrl.GetConfigOrDie()
-	userManager, err := backupcontroller.NewKopiaUserManager(mgr.GetClient(), mgr.GetScheme(), restConfig)
+	userManager, err := user.NewKopiaUserManager(mgr.GetClient(), mgr.GetScheme(), restConfig)
 	if err != nil {
 		setupLog.Error(err, "unable to create KopiaUserManager")
 		os.Exit(1)
 	}
 
-	if err = (&backupcontroller.KopiaBackupReconciler{
+	if err = (&kopiabackup.KopiaBackupReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		Recorder:      mgr.GetEventRecorderFor("kopiabackup-controller"),
@@ -125,7 +128,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "KopiaBackup")
 		os.Exit(1)
 	}
-	if err = (&backupcontroller.KopiaRepositoryReconciler{
+	if err = (&kopiarepository.KopiaRepositoryReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		Recorder:      mgr.GetEventRecorderFor("kopiarepository-controller"),

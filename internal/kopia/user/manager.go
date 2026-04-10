@@ -1,20 +1,4 @@
-/*
-Copyright 2024.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-package backup
+package user
 
 import (
 	"bytes"
@@ -39,16 +23,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
+	"github.com/fastlorenzo/kopia-operator/internal/kopia"
+	"github.com/fastlorenzo/kopia-operator/internal/naming"
 )
-
-// ServerNotReadyError indicates the Kopia server is not ready yet.
-type ServerNotReadyError struct {
-	Message string
-}
-
-func (e *ServerNotReadyError) Error() string {
-	return e.Message
-}
 
 // KopiaUserManager manages users on the Kopia Server.
 type KopiaUserManager struct {
@@ -59,14 +36,14 @@ type KopiaUserManager struct {
 }
 
 // NewKopiaUserManager creates a new KopiaUserManager.
-func NewKopiaUserManager(c client.Client, scheme *runtime.Scheme, restConfig *rest.Config) (*KopiaUserManager, error) {
+func NewKopiaUserManager(c client.Client, s *runtime.Scheme, restConfig *rest.Config) (*KopiaUserManager, error) {
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create clientset: %w", err)
 	}
 	return &KopiaUserManager{
 		Client:     c,
-		Scheme:     scheme,
+		Scheme:     s,
 		RestConfig: restConfig,
 		Clientset:  clientset,
 	}, nil
@@ -81,8 +58,8 @@ func (m *KopiaUserManager) EnsureUser(
 ) (string, error) {
 	logger := log.FromContext(ctx)
 
-	username := fmt.Sprintf("%s-%s@%s", backup.Namespace, backup.Spec.PVCName, repo.Spec.Hostname)
-	secretName := fmt.Sprintf("kopia-backup-user-%s-%s", backup.Namespace, backup.Spec.PVCName)
+	username := naming.Username(backup.Namespace, backup.Spec.PVCName, repo.Spec.Hostname)
+	secretName := naming.UserSecretName(backup.Namespace, backup.Spec.PVCName)
 
 	logger.Info("Ensuring Kopia user", "username", username, "backup", backup.Name)
 
@@ -127,7 +104,7 @@ func (m *KopiaUserManager) EnsureUser(
 		}
 
 		if err := m.createUserOnServer(ctx, repo, username, password); err != nil {
-			var serverNotReady *ServerNotReadyError
+			var serverNotReady *kopia.ServerNotReadyError
 			if errors.As(err, &serverNotReady) {
 				logger.Info("Server not ready, will requeue", "error", err.Error())
 				return "", err
@@ -143,7 +120,7 @@ func (m *KopiaUserManager) EnsureUser(
 	existingPassword := string(secret.Data["KOPIA_SERVER_PASSWORD"])
 
 	if err := m.createUserOnServer(ctx, repo, existingUsername, existingPassword); err != nil {
-		var serverNotReady *ServerNotReadyError
+		var serverNotReady *kopia.ServerNotReadyError
 		if errors.As(err, &serverNotReady) {
 			logger.Info("Server not ready, will requeue", "error", err.Error())
 			return "", err
@@ -162,8 +139,8 @@ func (m *KopiaUserManager) DeleteUser(
 ) error {
 	logger := log.FromContext(ctx)
 
-	username := fmt.Sprintf("%s-%s@%s", backup.Namespace, backup.Spec.PVCName, repo.Spec.Hostname)
-	secretName := fmt.Sprintf("kopia-backup-user-%s-%s", backup.Namespace, backup.Spec.PVCName)
+	username := naming.Username(backup.Namespace, backup.Spec.PVCName, repo.Spec.Hostname)
+	secretName := naming.UserSecretName(backup.Namespace, backup.Spec.PVCName)
 
 	logger.Info("Deleting Kopia user", "username", username, "backup", backup.Name)
 
@@ -235,7 +212,7 @@ kopia server refresh --server-control-username=admin --server-control-password="
 		logger.Error(err, "Failed to create user on server", "stdout", stdout, "stderr", stderr, "username", username)
 		if strings.Contains(err.Error(), "container not found") ||
 			strings.Contains(err.Error(), "unable to upgrade connection") {
-			return &ServerNotReadyError{
+			return &kopia.ServerNotReadyError{
 				Message: fmt.Sprintf("kopia-server container not ready yet: %v", err),
 			}
 		}
@@ -279,12 +256,7 @@ func (m *KopiaUserManager) getServerPodName(ctx context.Context, repo *backupv1a
 	podList := &corev1.PodList{}
 	listOpts := []client.ListOption{
 		client.InNamespace(repo.Namespace),
-		client.MatchingLabels(map[string]string{
-			"app":                          "kopia-server",
-			"app.kubernetes.io/name":       "kopia-server",
-			"app.kubernetes.io/instance":   repo.Name,
-			"app.kubernetes.io/managed-by": "kopia-operator",
-		}),
+		client.MatchingLabels(naming.ServerLabels(repo.Name)),
 	}
 
 	if err := m.Client.List(ctx, podList, listOpts...); err != nil {
@@ -292,7 +264,7 @@ func (m *KopiaUserManager) getServerPodName(ctx context.Context, repo *backupv1a
 	}
 
 	if len(podList.Items) == 0 {
-		return "", &ServerNotReadyError{
+		return "", &kopia.ServerNotReadyError{
 			Message: fmt.Sprintf("no server pod found for repository %s in namespace %s", repo.Name, repo.Namespace),
 		}
 	}
@@ -307,7 +279,7 @@ func (m *KopiaUserManager) getServerPodName(ctx context.Context, repo *backupv1a
 		}
 	}
 
-	return "", &ServerNotReadyError{
+	return "", &kopia.ServerNotReadyError{
 		Message: fmt.Sprintf("kopia-server container not ready yet for repository %s in namespace %s", repo.Name, repo.Namespace),
 	}
 }

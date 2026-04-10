@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package backup
+package kopiarepository
 
 import (
 	"context"
@@ -113,7 +113,6 @@ var _ = Describe("KopiaRepository Controller", func() {
 					Hostname:    "test-host",
 					Username:    "test-user",
 					StorageType: backupv1alpha1.StorageTypeFilesystem,
-					// No PasswordSecretName — should be rejected by CRD validation
 				},
 			}
 			err := k8sClient.Create(ctx, repo)
@@ -168,7 +167,7 @@ var _ = Describe("KopiaRepository Controller", func() {
 				Client:        k8sClient,
 				Scheme:        k8sClient.Scheme(),
 				Recorder:      record.NewFakeRecorder(10),
-				ServerManager: nil, // not configured
+				ServerManager: nil,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

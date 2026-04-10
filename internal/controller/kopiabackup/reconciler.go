@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package backup
+package kopiabackup
 
 import (
 	"context"
@@ -41,6 +41,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
+	"github.com/fastlorenzo/kopia-operator/internal/kopia"
+	"github.com/fastlorenzo/kopia-operator/internal/naming"
 )
 
 const (
@@ -48,6 +50,9 @@ const (
 	repositoryLabelKey    = "backup.cloudinfra.be/repository"
 	finalizerName         = "backup.cloudinfra.be/finalizer"
 	requeueDelay          = 30 * time.Second
+
+	// pvcNameField is the field indexer for PVC name in KopiaBackup spec.
+	pvcNameField = ".spec.pvcName"
 
 	// DefaultKopiaImage is the default Kopia container image used by backup CronJobs.
 	DefaultKopiaImage = "ghcr.io/fastlorenzo/kopia:0.20.1@sha256:4a2660db62960eb0b4ba98982c4566bcc9dd2ee3b15b31af9626146aa4e5d8e3"
@@ -64,10 +69,10 @@ type KopiaBackupReconciler struct {
 	KopiaImage string
 
 	// ServerManager manages Kopia Server deployments (optional, for server mode).
-	ServerManager *KopiaServerManager
+	ServerManager kopia.ServerManager
 
 	// UserManager manages Kopia Server users (optional, for server mode).
-	UserManager *KopiaUserManager
+	UserManager kopia.UserManager
 }
 
 func (r *KopiaBackupReconciler) kopiaImage() string {
@@ -104,7 +109,6 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if !kBackup.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&kBackup, finalizerName) {
 			log.Info("Running finalizer cleanup")
-			// Delete server mode user if applicable
 			if r.UserManager != nil && kBackup.Spec.UserCredentialsSecret != "" {
 				repo, err := r.getKopiaRepository(ctx, kBackup.Spec.Repository, kBackup.Namespace)
 				if err == nil && repo.Spec.Server.Enabled {
@@ -184,7 +188,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 		secretName, err := r.UserManager.EnsureUser(ctx, &kBackup, repository)
 		if err != nil {
-			var serverNotReady *ServerNotReadyError
+			var serverNotReady *kopia.ServerNotReadyError
 			if errors.As(err, &serverNotReady) {
 				log.Info("Server not ready, requeuing", "error", err.Error())
 				return ctrl.Result{RequeueAfter: requeueDelay}, nil
@@ -217,7 +221,7 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	kBackup.Status.NodeName = nodeName
 
 	// --- Reconcile the CronJob ---
-	cronJobName := getCronJobNameFromPVCName(kBackup.Spec.PVCName)
+	cronJobName := naming.CronJobName(kBackup.Spec.PVCName)
 	kBackup.Status.CronJobName = cronJobName
 
 	if err := r.reconcileCronJob(ctx, &kBackup, cronJobName, nodeName, appName, repository); err != nil {
@@ -274,7 +278,6 @@ func (r *KopiaBackupReconciler) handlePVCRequest(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 	}
 
-	// Verify the repository exists
 	repository, err := r.getKopiaRepository(ctx, repositoryName, pvc.Namespace)
 	if err != nil {
 		log.Info("KopiaRepository not found for PVC", "repository", repositoryName)
@@ -361,7 +364,7 @@ func (r *KopiaBackupReconciler) findPodUsingPVC(ctx context.Context, kBackup *ba
 
 // reconcileConfigMap creates or updates the Kopia config ConfigMap (direct mode only).
 func (r *KopiaBackupReconciler) reconcileConfigMap(ctx context.Context, backup *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.KopiaRepository) error {
-	configMapName := fmt.Sprintf("kopia-config-%s", repo.Name)
+	configMapName := naming.ConfigMapName(repo.Name)
 	desired, err := buildConfigMap(backup, repo)
 	if err != nil {
 		return fmt.Errorf("failed to build ConfigMap: %w", err)

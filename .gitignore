@@ -30,3 +30,4 @@ go.work
 # Custom
 test/data/*
 output-dir/
+CODE_REVIEW_TASKS.md

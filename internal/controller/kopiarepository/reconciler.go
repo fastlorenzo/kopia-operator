@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package backup
+package kopiarepository
 
 import (
 	"context"
@@ -32,6 +32,8 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
+	"github.com/fastlorenzo/kopia-operator/internal/kopia"
+	"github.com/fastlorenzo/kopia-operator/internal/naming"
 )
 
 // KopiaRepositoryReconciler reconciles a KopiaRepository object.
@@ -41,7 +43,7 @@ type KopiaRepositoryReconciler struct {
 	Recorder record.EventRecorder
 
 	// ServerManager manages Kopia Server deployments (optional, for server mode).
-	ServerManager *KopiaServerManager
+	ServerManager kopia.ServerManager
 }
 
 // +kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories,verbs=get;list;watch;create;update;patch;delete
@@ -139,8 +141,8 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 		repo.Status.ServerReady = ready
 		repo.Status.ServerURL = r.ServerManager.GetServerURL(&repo)
-		repo.Status.ServerDeployment = fmt.Sprintf("kopia-server-%s", repo.Name)
-		repo.Status.ServerService = fmt.Sprintf("kopia-server-%s", repo.Name)
+		repo.Status.ServerDeployment = naming.ServerDeploymentName(repo.Name)
+		repo.Status.ServerService = naming.ServerServiceName(repo.Name)
 
 		if ready {
 			meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{

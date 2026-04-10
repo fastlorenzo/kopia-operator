@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package backup
+package kopiabackup
 
 import (
 	"encoding/json"
@@ -27,6 +27,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
+	"github.com/fastlorenzo/kopia-operator/internal/naming"
+)
+
+const (
+	// maxBackupHistoryEntries is the maximum number of backup history entries to keep.
+	maxBackupHistoryEntries = 10
 )
 
 // buildBackupCommand builds the shell command to run in the backup container.
@@ -205,7 +211,7 @@ func buildServerModeConfig(
 	volumeMounts []corev1.VolumeMount,
 	volumes []corev1.Volume,
 ) ([]corev1.EnvVar, []corev1.EnvFromSource, []corev1.VolumeMount, []corev1.Volume) {
-	secretName := fmt.Sprintf("kopia-backup-user-%s-%s", backup.Namespace, backup.Spec.PVCName)
+	secretName := naming.UserSecretName(backup.Namespace, backup.Spec.PVCName)
 
 	envFrom = append(envFrom, corev1.EnvFromSource{
 		SecretRef: &corev1.SecretEnvSource{
@@ -285,7 +291,7 @@ func buildDirectModeConfig(
 				VolumeSource: corev1.VolumeSource{
 					ConfigMap: &corev1.ConfigMapVolumeSource{
 						LocalObjectReference: corev1.LocalObjectReference{
-							Name: fmt.Sprintf("kopia-config-%s", repo.Name),
+							Name: naming.ConfigMapName(repo.Name),
 						},
 					},
 				},
@@ -408,7 +414,7 @@ func buildConfigMap(backup *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.Kop
 
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("kopia-config-%s", repo.Name),
+			Name:      naming.ConfigMapName(repo.Name),
 			Namespace: backup.Namespace,
 			Labels: map[string]string{
 				"backup.cloudinfra.be/pvc-name": backup.Spec.PVCName,

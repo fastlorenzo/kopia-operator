@@ -1,20 +1,4 @@
-/*
-Copyright 2024.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-package backup
+package server
 
 import (
 	"context"
@@ -42,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
+	"github.com/fastlorenzo/kopia-operator/internal/naming"
 )
 
 // KopiaServerManager manages the lifecycle of Kopia Server deployments.
@@ -64,7 +49,7 @@ func (m *KopiaServerManager) EnsureServerDeployment(
 	repo *backupv1alpha1.KopiaRepository,
 ) error {
 	logger := log.FromContext(ctx)
-	deploymentName := fmt.Sprintf("kopia-server-%s", repo.Name)
+	deploymentName := naming.ServerDeploymentName(repo.Name)
 
 	desired := m.constructServerDeployment(repo, deploymentName)
 	if err := ctrl.SetControllerReference(repo, desired, m.Scheme); err != nil {
@@ -92,7 +77,7 @@ func (m *KopiaServerManager) EnsureServerService(
 	repo *backupv1alpha1.KopiaRepository,
 ) error {
 	logger := log.FromContext(ctx)
-	serviceName := fmt.Sprintf("kopia-server-%s", repo.Name)
+	serviceName := naming.ServerServiceName(repo.Name)
 
 	desired := m.constructServerService(repo, serviceName)
 	if err := ctrl.SetControllerReference(repo, desired, m.Scheme); err != nil {
@@ -118,7 +103,7 @@ func (m *KopiaServerManager) EnsureServerService(
 
 // GetServerURL returns the in-cluster URL for the Kopia Server.
 func (m *KopiaServerManager) GetServerURL(repo *backupv1alpha1.KopiaRepository) string {
-	serviceName := fmt.Sprintf("kopia-server-%s", repo.Name)
+	serviceName := naming.ServerServiceName(repo.Name)
 	port := int32(51515)
 	if repo.Spec.Server.Exposure.ServicePort != 0 {
 		port = repo.Spec.Server.Exposure.ServicePort
@@ -131,7 +116,7 @@ func (m *KopiaServerManager) IsServerReady(
 	ctx context.Context,
 	repo *backupv1alpha1.KopiaRepository,
 ) (bool, error) {
-	deploymentName := fmt.Sprintf("kopia-server-%s", repo.Name)
+	deploymentName := naming.ServerDeploymentName(repo.Name)
 	deployment := &appsv1.Deployment{}
 	err := m.Client.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: repo.Namespace}, deployment)
 	if err != nil {
@@ -155,14 +140,7 @@ func (m *KopiaServerManager) constructServerDeployment(
 		image = repo.Spec.Server.Image
 	}
 
-	labels := map[string]string{
-		"app":                          "kopia-server",
-		"kopia-repository":             repo.Name,
-		"app.kubernetes.io/name":       "kopia-server",
-		"app.kubernetes.io/instance":   repo.Name,
-		"app.kubernetes.io/managed-by": "kopia-operator",
-	}
-
+	labels := naming.ServerLabels(repo.Name)
 	tlsSecretName := m.getTLSSecretName(repo)
 
 	env := []corev1.EnvVar{
@@ -188,7 +166,7 @@ func (m *KopiaServerManager) constructServerDeployment(
 				SecretKeyRef: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{Name: tlsSecretName},
 					Key:                  "fingerprint",
-					Optional:             func(b bool) *bool { return &b }(true),
+					Optional:             boolPtr(true),
 				},
 			},
 		},
@@ -310,13 +288,7 @@ func (m *KopiaServerManager) constructServerService(
 	repo *backupv1alpha1.KopiaRepository,
 	serviceName string,
 ) *corev1.Service {
-	labels := map[string]string{
-		"app":                          "kopia-server",
-		"kopia-repository":             repo.Name,
-		"app.kubernetes.io/name":       "kopia-server",
-		"app.kubernetes.io/instance":   repo.Name,
-		"app.kubernetes.io/managed-by": "kopia-operator",
-	}
+	labels := naming.ServerLabels(repo.Name)
 
 	serviceType := corev1.ServiceTypeClusterIP
 	if repo.Spec.Server.Exposure.ServiceType != "" {
@@ -368,8 +340,8 @@ func (m *KopiaServerManager) constructStorageVolume(repo *backupv1alpha1.KopiaRe
 	return volume
 }
 
-// buildCacheFlags generates Kopia cache configuration flags from repository spec.
-func buildCacheFlags(caching backupv1alpha1.KopiaRepositoryCachingSpec) string {
+// BuildCacheFlags generates Kopia cache configuration flags from repository spec.
+func BuildCacheFlags(caching backupv1alpha1.KopiaRepositoryCachingSpec) string {
 	flags := ""
 	if caching.CacheDirectory != "" {
 		flags += fmt.Sprintf(" --cache-directory=%s", caching.CacheDirectory)
@@ -403,7 +375,7 @@ func buildCacheFlags(caching backupv1alpha1.KopiaRepositoryCachingSpec) string {
 
 // constructServerCommand builds the command to start the Kopia Server.
 func (m *KopiaServerManager) constructServerCommand(repo *backupv1alpha1.KopiaRepository) string {
-	cacheFlags := buildCacheFlags(repo.Spec.Caching)
+	cacheFlags := BuildCacheFlags(repo.Spec.Caching)
 
 	var repoConnect string
 	switch repo.Spec.StorageType {
@@ -577,7 +549,7 @@ func (m *KopiaServerManager) getTLSSecretName(repo *backupv1alpha1.KopiaReposito
 	if repo.Spec.Server.TLS.SecretName != "" {
 		return repo.Spec.Server.TLS.SecretName
 	}
-	return fmt.Sprintf("kopia-server-tls-%s", repo.Name)
+	return naming.TLSSecretName(repo.Name)
 }
 
 // EnsureTLSSecret ensures TLS certificates exist for the Kopia Server.
@@ -628,11 +600,7 @@ func (m *KopiaServerManager) EnsureTLSSecret(
 
 	logger.Info("Auto-generating TLS certificate", "name", tlsSecretName)
 
-	serviceName := fmt.Sprintf("kopia-server-%s", repo.Name)
-	servicePort := int32(51515)
-	if repo.Spec.Server.Exposure.ServicePort != 0 {
-		servicePort = repo.Spec.Server.Exposure.ServicePort
-	}
+	serviceName := naming.ServerServiceName(repo.Name)
 
 	dnsNames := []string{
 		serviceName,
@@ -647,7 +615,7 @@ func (m *KopiaServerManager) EnsureTLSSecret(
 		commonName = fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, repo.Namespace)
 	}
 
-	certPEM, keyPEM, err := generateSelfSignedCert(commonName, dnsNames, servicePort)
+	certPEM, keyPEM, err := generateSelfSignedCert(commonName, dnsNames)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate TLS certificate: %w", err)
 	}
@@ -702,7 +670,7 @@ func calculateCertFingerprint(certPEM []byte) (string, error) {
 }
 
 // generateSelfSignedCert generates a self-signed TLS certificate.
-func generateSelfSignedCert(commonName string, dnsNames []string, _ int32) ([]byte, []byte, error) {
+func generateSelfSignedCert(commonName string, dnsNames []string) ([]byte, []byte, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate private key: %w", err)
@@ -742,4 +710,12 @@ func generateSelfSignedCert(commonName string, dnsNames []string, _ int32) ([]by
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
 
 	return certPEM, keyPEM, nil
+}
+
+func int32Ptr(i int32) *int32 {
+	return &i
+}
+
+func boolPtr(b bool) *bool {
+	return &b
 }
