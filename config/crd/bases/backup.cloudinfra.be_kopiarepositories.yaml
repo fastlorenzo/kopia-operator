@@ -216,7 +216,6 @@ spec:
                         description: Type of exposure.
                         enum:
                         - Service
-                        - ""
                         type: string
                     type: object
                   extraArgs:

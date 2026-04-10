@@ -41,6 +41,14 @@ type KopiaServerManager struct {
 const (
 	// defaultServerPort is the default port for the Kopia Server API.
 	defaultServerPort = 51515
+
+	// Probe configuration constants for the Kopia server container.
+	livenessInitialDelay  = 30
+	livenessPeriod        = 10
+	readinessInitialDelay = 10
+	readinessPeriod       = 5
+	probeTimeout          = 5
+	probeFailureThreshold = 3
 )
 
 // shellQuote wraps a value in single quotes with proper escaping for safe
@@ -252,10 +260,10 @@ func (m *KopiaServerManager) constructServerDeployment(
 			ProbeHandler: corev1.ProbeHandler{
 				TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(defaultServerPort)},
 			},
-			InitialDelaySeconds: 30,
-			PeriodSeconds:       10,
-			TimeoutSeconds:      5,
-			FailureThreshold:    3,
+			InitialDelaySeconds: livenessInitialDelay,
+			PeriodSeconds:       livenessPeriod,
+			TimeoutSeconds:      probeTimeout,
+			FailureThreshold:    probeFailureThreshold,
 		},
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
@@ -266,10 +274,10 @@ func (m *KopiaServerManager) constructServerDeployment(
 					},
 				},
 			},
-			InitialDelaySeconds: 10,
-			PeriodSeconds:       5,
-			TimeoutSeconds:      5,
-			FailureThreshold:    3,
+			InitialDelaySeconds: readinessInitialDelay,
+			PeriodSeconds:       readinessPeriod,
+			TimeoutSeconds:      probeTimeout,
+			FailureThreshold:    probeFailureThreshold,
 		},
 	}
 
@@ -591,10 +599,10 @@ func (m *KopiaServerManager) EnsureTLSSecret(
 		if repo.Spec.Server.TLS.SecretName != "" {
 			certPEM, ok := secret.Data["tls.crt"]
 			if !ok {
-				return "", fmt.Errorf("TLS secret %s missing 'tls.crt' key", tlsSecretName)
+				return "", fmt.Errorf("tls secret %s missing 'tls.crt' key", tlsSecretName)
 			}
 			if _, ok := secret.Data["tls.key"]; !ok {
-				return "", fmt.Errorf("TLS secret %s missing 'tls.key' key", tlsSecretName)
+				return "", fmt.Errorf("tls secret %s missing 'tls.key' key", tlsSecretName)
 			}
 			fingerprint, err := calculateCertFingerprint(certPEM)
 			if err != nil {
@@ -628,7 +636,7 @@ func (m *KopiaServerManager) EnsureTLSSecret(
 	}
 
 	if repo.Spec.Server.TLS.SecretName != "" {
-		return "", fmt.Errorf("TLS secret %s not found — create it with 'tls.crt' and 'tls.key' keys", tlsSecretName)
+		return "", fmt.Errorf("tls secret %s not found: create it with 'tls.crt' and 'tls.key' keys", tlsSecretName)
 	}
 
 	logger.Info("Auto-generating TLS certificate", "name", tlsSecretName)

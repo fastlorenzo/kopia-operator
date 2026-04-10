@@ -72,21 +72,18 @@ type KopiaServerTLSSpec struct {
 // KopiaServerExposureSpec defines how the Kopia Server should be exposed.
 type KopiaServerExposureSpec struct {
 	// Type of exposure.
-	// +kubebuilder:validation:Enum=Service;""
+	// +kubebuilder:validation:Enum=Service
 	// +kubebuilder:default:=Service
-	// +optional
 	Type string `json:"type,omitempty"`
 
 	// Kubernetes Service type.
 	// +kubebuilder:default:=ClusterIP
-	// +optional
 	ServiceType corev1.ServiceType `json:"serviceType,omitempty"`
 
 	// Port for the Kopia Server service.
 	// +kubebuilder:default:=51515
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
-	// +optional
 	ServicePort int32 `json:"servicePort,omitempty"`
 }
 
@@ -100,13 +97,11 @@ type KopiaServerSpec struct {
 
 	// Container image for the Kopia Server.
 	// +kubebuilder:default:="ghcr.io/fastlorenzo/kopia:latest"
-	// +optional
 	Image string `json:"image,omitempty"`
 
 	// Number of server replicas.
 	// +kubebuilder:default:=1
 	// +kubebuilder:validation:Minimum=1
-	// +optional
 	Replicas int32 `json:"replicas,omitempty"`
 
 	// Resource requirements for the server.
@@ -184,12 +179,10 @@ type KopiaRepositoryStorageSFTPSpec struct {
 
 	// Use external SSH command instead of built-in SSH.
 	// +kubebuilder:default:=false
-	// +optional
 	ExternalSSH bool `json:"externalSSH,omitempty"`
 
 	// SSH command to use when ExternalSSH is true.
 	// +kubebuilder:default:="ssh"
-	// +optional
 	SSHCommand string `json:"sshCommand,omitempty"`
 
 	// Directory shards configuration.

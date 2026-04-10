@@ -174,7 +174,7 @@ var _ = Describe("KopiaRepository Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("ServerManager not configured"))
+			Expect(err.Error()).To(ContainSubstring("server manager not configured"))
 		})
 	})
 

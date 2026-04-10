@@ -103,7 +103,7 @@ func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Requ
 				Message:            "Server mode requires ServerManager to be configured",
 				ObservedGeneration: repo.Generation,
 			})
-			return ctrl.Result{}, fmt.Errorf("ServerManager not configured for server mode")
+			return ctrl.Result{}, fmt.Errorf("server manager not configured for server mode")
 		}
 
 		// Ensure TLS certificates

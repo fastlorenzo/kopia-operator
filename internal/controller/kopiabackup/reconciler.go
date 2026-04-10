@@ -238,7 +238,7 @@ func (r *KopiaBackupReconciler) reconcileServerCredentials(
 	if r.UserManager == nil {
 		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			backupv1alpha1.ReasonCronJobFailed, "Server mode requires UserManager to be configured")
-		return ctrl.Result{}, true, fmt.Errorf("UserManager not configured for server mode")
+		return ctrl.Result{}, true, fmt.Errorf("user manager not configured for server mode")
 	}
 
 	secretName, err := r.UserManager.EnsureUser(ctx, backup, repo)
@@ -428,48 +428,28 @@ func (r *KopiaBackupReconciler) reconcileCronJob(
 
 // --- Watch helpers ---
 
-// findBackupsForPVC maps PVC changes to KopiaBackup reconcile requests
-// for backups that reference the changed PVC.
-func (r *KopiaBackupReconciler) findBackupsForPVC(ctx context.Context, pvc client.Object) []reconcile.Request {
-	log := ctrllog.FromContext(ctx)
-	var backups backupv1alpha1.KopiaBackupList
-	if err := r.List(ctx, &backups,
-		client.InNamespace(pvc.GetNamespace()),
-		client.MatchingFields{pvcNameField: pvc.GetName()},
-	); err != nil {
-		log.Error(err, "Failed to list KopiaBackups for PVC", "pvc", pvc.GetName(), "namespace", pvc.GetNamespace())
-		return nil
-	}
+// findBackupsForField returns a handler.MapFunc that maps object changes to
+// KopiaBackup reconcile requests using the given field index.
+func (r *KopiaBackupReconciler) findBackupsForField(fieldName string) handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		log := ctrllog.FromContext(ctx)
+		var backups backupv1alpha1.KopiaBackupList
+		if err := r.List(ctx, &backups,
+			client.InNamespace(obj.GetNamespace()),
+			client.MatchingFields{fieldName: obj.GetName()},
+		); err != nil {
+			log.Error(err, "Failed to list KopiaBackups", "field", fieldName, "value", obj.GetName(), "namespace", obj.GetNamespace())
+			return nil
+		}
 
-	requests := make([]reconcile.Request, 0, len(backups.Items))
-	for _, item := range backups.Items {
-		requests = append(requests, reconcile.Request{
-			NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace},
-		})
+		requests := make([]reconcile.Request, 0, len(backups.Items))
+		for _, item := range backups.Items {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace},
+			})
+		}
+		return requests
 	}
-	return requests
-}
-
-// findBackupsForRepository maps KopiaRepository changes to KopiaBackup reconcile
-// requests for backups that reference the changed repository.
-func (r *KopiaBackupReconciler) findBackupsForRepository(ctx context.Context, repo client.Object) []reconcile.Request {
-	log := ctrllog.FromContext(ctx)
-	var backups backupv1alpha1.KopiaBackupList
-	if err := r.List(ctx, &backups,
-		client.InNamespace(repo.GetNamespace()),
-		client.MatchingFields{repositoryNameField: repo.GetName()},
-	); err != nil {
-		log.Error(err, "Failed to list KopiaBackups for repository", "repository", repo.GetName(), "namespace", repo.GetNamespace())
-		return nil
-	}
-
-	requests := make([]reconcile.Request, 0, len(backups.Items))
-	for _, item := range backups.Items {
-		requests = append(requests, reconcile.Request{
-			NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace},
-		})
-	}
-	return requests
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -514,12 +494,12 @@ func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Watches(
 			&corev1.PersistentVolumeClaim{},
-			handler.EnqueueRequestsFromMapFunc(r.findBackupsForPVC),
+			handler.EnqueueRequestsFromMapFunc(r.findBackupsForField(pvcNameField)),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Watches(
 			&backupv1alpha1.KopiaRepository{},
-			handler.EnqueueRequestsFromMapFunc(r.findBackupsForRepository),
+			handler.EnqueueRequestsFromMapFunc(r.findBackupsForField(repositoryNameField)),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)
