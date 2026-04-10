@@ -23,63 +23,174 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 )
 
 var _ = Describe("KopiaBackup Controller", func() {
 	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+		const (
+			backupName = "test-backup"
+			repoName   = "test-repo"
+			pvcName    = "test-pvc"
+			namespace  = "default"
+		)
 
 		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Name:      backupName,
+			Namespace: namespace,
 		}
-		kopiabackup := &backupv1alpha1.KopiaBackup{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind KopiaBackup")
-			err := k8sClient.Get(ctx, typeNamespacedName, kopiabackup)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &backupv1alpha1.KopiaBackup{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
+			By("creating prerequisite PVC")
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      pvcName,
+					Namespace: namespace,
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: *resource.NewQuantity(1<<30, resource.BinarySI),
+						},
 					},
-					// TODO(user): Specify other spec details if needed.
+				},
+			}
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: namespace}, pvc)
+			if errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+			}
+
+			By("creating prerequisite KopiaRepository")
+			repo := &backupv1alpha1.KopiaRepository{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      repoName,
+					Namespace: namespace,
+				},
+				Spec: backupv1alpha1.KopiaRepositorySpec{
+					Hostname:           "test-host",
+					Username:           "test-user",
+					StorageType:        backupv1alpha1.StorageTypeFilesystem,
+					PasswordSecretName: "kopia-password",
+					FileSystemOptions: backupv1alpha1.KopiaRepositoryStorageFileSystemSpec{
+						Path: "/backup/repo",
+					},
+				},
+			}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: repoName, Namespace: namespace}, repo)
+			if errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, repo)).To(Succeed())
+			}
+
+			By("creating the KopiaBackup resource")
+			backup := &backupv1alpha1.KopiaBackup{}
+			err = k8sClient.Get(ctx, typeNamespacedName, backup)
+			if errors.IsNotFound(err) {
+				backup = &backupv1alpha1.KopiaBackup{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      backupName,
+						Namespace: namespace,
+					},
+					Spec: backupv1alpha1.KopiaBackupSpec{
+						PVCName:    pvcName,
+						Schedule:   "0 3 * * *",
+						Repository: repoName,
+					},
 				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+				Expect(k8sClient.Create(ctx, backup)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &backupv1alpha1.KopiaBackup{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
+			By("cleaning up the KopiaBackup")
+			backup := &backupv1alpha1.KopiaBackup{}
+			if err := k8sClient.Get(ctx, typeNamespacedName, backup); err == nil {
+				// Remove finalizer first so delete actually removes the object
+				backup.Finalizers = nil
+				_ = k8sClient.Update(ctx, backup)
+				Expect(k8sClient.Delete(ctx, backup)).To(Succeed())
+			}
 
-			By("Cleanup the specific resource instance KopiaBackup")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			By("cleaning up the KopiaRepository")
+			repo := &backupv1alpha1.KopiaRepository{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: repoName, Namespace: namespace}, repo); err == nil {
+				Expect(k8sClient.Delete(ctx, repo)).To(Succeed())
+			}
+
+			By("cleaning up the PVC")
+			pvc := &corev1.PersistentVolumeClaim{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: namespace}, pvc); err == nil {
+				Expect(k8sClient.Delete(ctx, pvc)).To(Succeed())
+			}
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
+
+		It("should add a finalizer on first reconcile", func() {
 			controllerReconciler := &KopiaBackupReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Recorder: record.NewFakeRecorder(10),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			var backup backupv1alpha1.KopiaBackup
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &backup)).To(Succeed())
+			Expect(backup.Finalizers).To(ContainElement(finalizerName))
+		})
+
+		It("should set NoPodFound condition when no pod uses the PVC", func() {
+			controllerReconciler := &KopiaBackupReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Recorder: record.NewFakeRecorder(10),
+			}
+
+			// Reconcile twice: first adds finalizer, second does actual work
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var backup backupv1alpha1.KopiaBackup
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &backup)).To(Succeed())
+
+			readyCond := meta.FindStatusCondition(backup.Status.Conditions, backupv1alpha1.ConditionTypeReady)
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(readyCond.Reason).To(Equal(backupv1alpha1.ReasonNoPodFound))
+		})
+
+		It("should handle missing KopiaBackup by checking for PVC", func() {
+			controllerReconciler := &KopiaBackupReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Recorder: record.NewFakeRecorder(10),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "nonexistent-backup",
+					Namespace: namespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 
@@ -126,6 +237,44 @@ var _ = Describe("KopiaBackup Controller", func() {
 				},
 			}
 			Expect(getScheduleFromPVC(pvc, defaultSchedule)).To(Equal(defaultSchedule))
+		})
+	})
+
+	Context("getCronJobNameFromPVCName", func() {
+		It("should prefix with snapshot- for short names", func() {
+			Expect(getCronJobNameFromPVCName("my-pvc")).To(Equal("snapshot-my-pvc"))
+		})
+
+		It("should truncate long names", func() {
+			longName := "this-is-a-very-long-pvc-name-that-exceeds-forty-two-chars-limit"
+			result := getCronJobNameFromPVCName(longName)
+			Expect(result).To(HavePrefix("snapshot-"))
+			Expect(len(result)).To(BeNumerically("<=", 54))
+		})
+	})
+
+	Context("buildConfigMap", func() {
+		It("should produce valid JSON in repository.config", func() {
+			repo := &backupv1alpha1.KopiaRepository{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-repo"},
+				Spec: backupv1alpha1.KopiaRepositorySpec{
+					StorageType: backupv1alpha1.StorageTypeFilesystem,
+					Hostname:    "myhost",
+					Username:    "myuser",
+					Description: "test",
+					FileSystemOptions: backupv1alpha1.KopiaRepositoryStorageFileSystemSpec{
+						Path: "/mnt/repo",
+					},
+					Caching: backupv1alpha1.KopiaRepositoryCachingSpec{
+						CacheDirectory: "/cache",
+					},
+				},
+			}
+			cm := buildConfigMap("kopia-config-test-repo", "default", repo)
+			Expect(cm.Data).To(HaveKey("repository.config"))
+			Expect(cm.Data["repository.config"]).To(ContainSubstring(`"hostname": "myhost"`))
+			Expect(cm.Data["repository.config"]).To(ContainSubstring(`"username": "myuser"`))
+			Expect(cm.Data["repository.config"]).To(ContainSubstring(`"path": "/mnt/repo"`))
 		})
 	})
 })

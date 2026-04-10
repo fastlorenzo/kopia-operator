@@ -22,52 +22,56 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 )
 
 var _ = Describe("KopiaRepository Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	Context("When reconciling a valid repository", func() {
+		const (
+			resourceName = "test-repo"
+			namespace    = "default"
+		)
 
 		ctx := context.Background()
-
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
-		kopiarepository := &backupv1alpha1.KopiaRepository{}
+		typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: namespace}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind KopiaRepository")
-			err := k8sClient.Get(ctx, typeNamespacedName, kopiarepository)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &backupv1alpha1.KopiaRepository{
+			By("creating a valid KopiaRepository resource")
+			repo := &backupv1alpha1.KopiaRepository{}
+			err := k8sClient.Get(ctx, typeNamespacedName, repo)
+			if errors.IsNotFound(err) {
+				repo = &backupv1alpha1.KopiaRepository{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
-						Namespace: "default",
+						Namespace: namespace,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: backupv1alpha1.KopiaRepositorySpec{
+						Hostname:           "test-host",
+						Username:           "test-user",
+						StorageType:        backupv1alpha1.StorageTypeFilesystem,
+						PasswordSecretName: "kopia-password",
+						FileSystemOptions: backupv1alpha1.KopiaRepositoryStorageFileSystemSpec{
+							Path: "/backup/repo",
+						},
+					},
 				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+				Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &backupv1alpha1.KopiaRepository{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance KopiaRepository")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			repo := &backupv1alpha1.KopiaRepository{}
+			if err := k8sClient.Get(ctx, typeNamespacedName, repo); err == nil {
+				Expect(k8sClient.Delete(ctx, repo)).To(Succeed())
+			}
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
+
+		It("should set Ready condition to True", func() {
 			controllerReconciler := &KopiaRepositoryReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
@@ -77,8 +81,28 @@ var _ = Describe("KopiaRepository Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			var repo backupv1alpha1.KopiaRepository
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &repo)).To(Succeed())
+
+			readyCond := meta.FindStatusCondition(repo.Status.Conditions, backupv1alpha1.ConditionTypeRepositoryReady)
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(readyCond.Reason).To(Equal(backupv1alpha1.ReasonConfigValid))
+		})
+	})
+
+	Context("When reconciling a non-existent resource", func() {
+		It("should not error", func() {
+			controllerReconciler := &KopiaRepositoryReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(context.Background(), reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: "nonexistent", Namespace: "default"},
+			})
+			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 })
