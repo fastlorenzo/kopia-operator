@@ -342,23 +342,28 @@ func (m *KopiaServerManager) constructStorageVolume(repo *backupv1alpha1.KopiaRe
 	return volume
 }
 
+// quantityToMB converts a resource.Quantity to megabytes.
+func quantityToMB(q resource.Quantity) int64 {
+	return q.Value() / (1024 * 1024)
+}
+
 // BuildCacheFlags generates Kopia cache configuration flags from repository spec.
 func BuildCacheFlags(caching backupv1alpha1.KopiaRepositoryCachingSpec) string {
 	var b strings.Builder
 	if caching.CacheDirectory != "" {
 		fmt.Fprintf(&b, " --cache-directory=%s", caching.CacheDirectory)
 	}
-	if caching.ContentCacheSizeBytes > 0 {
-		fmt.Fprintf(&b, " --content-cache-size-mb=%d", caching.ContentCacheSizeBytes/(1024*1024))
+	if !caching.ContentCacheSize.IsZero() {
+		fmt.Fprintf(&b, " --content-cache-size-mb=%d", quantityToMB(caching.ContentCacheSize))
 	}
-	if caching.ContentCacheSizeLimitBytes > 0 {
-		fmt.Fprintf(&b, " --content-cache-size-limit-mb=%d", caching.ContentCacheSizeLimitBytes/(1024*1024))
+	if !caching.ContentCacheSizeLimit.IsZero() {
+		fmt.Fprintf(&b, " --content-cache-size-limit-mb=%d", quantityToMB(caching.ContentCacheSizeLimit))
 	}
-	if caching.MetadataCacheSizeBytes > 0 {
-		fmt.Fprintf(&b, " --metadata-cache-size-mb=%d", caching.MetadataCacheSizeBytes/(1024*1024))
+	if !caching.MetadataCacheSize.IsZero() {
+		fmt.Fprintf(&b, " --metadata-cache-size-mb=%d", quantityToMB(caching.MetadataCacheSize))
 	}
-	if caching.MetadataCacheSizeLimitBytes > 0 {
-		fmt.Fprintf(&b, " --metadata-cache-size-limit-mb=%d", caching.MetadataCacheSizeLimitBytes/(1024*1024))
+	if !caching.MetadataCacheSizeLimit.IsZero() {
+		fmt.Fprintf(&b, " --metadata-cache-size-limit-mb=%d", quantityToMB(caching.MetadataCacheSizeLimit))
 	}
 	if caching.MaxListCacheDuration > 0 {
 		fmt.Fprintf(&b, " --max-list-cache-duration=%ds", caching.MaxListCacheDuration)

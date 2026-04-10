@@ -443,8 +443,8 @@ func buildConfigMap(backup *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.Kop
 		},
 		Caching: kopiaConfigCaching{
 			CacheDirectory:       repo.Spec.Caching.CacheDirectory,
-			MaxCacheSize:         repo.Spec.Caching.ContentCacheSizeBytes,
-			MaxMetadataCacheSize: repo.Spec.Caching.MetadataCacheSizeBytes,
+			MaxCacheSize:         repo.Spec.Caching.ContentCacheSize.Value(),
+			MaxMetadataCacheSize: repo.Spec.Caching.MetadataCacheSize.Value(),
 			MaxListCacheDuration: repo.Spec.Caching.MaxListCacheDuration,
 		},
 		Hostname:           repo.Spec.Hostname,

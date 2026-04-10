@@ -63,30 +63,42 @@ spec:
                     default: cache
                     description: Directory used for local caching.
                     type: string
-                  contentCacheSizeLimitBytes:
-                    description: Hard limit for content cache size in bytes.
-                    format: int64
-                    type: integer
-                  maxCacheSize:
-                    default: 5242880000
-                    description: Maximum size of the content cache in bytes.
-                    format: int64
-                    type: integer
+                  contentCacheSize:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 5000Mi
+                    description: Maximum size of the content cache.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  contentCacheSizeLimit:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: Hard limit for content cache size.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
                   maxListCacheDuration:
                     default: 30
                     description: Maximum duration (in seconds) to cache directory
                       listings.
                     format: int64
                     type: integer
-                  maxMetadataCacheSize:
-                    default: 5242880000
-                    description: Maximum size of the metadata cache in bytes.
-                    format: int64
-                    type: integer
-                  metadataCacheSizeLimitBytes:
-                    description: Hard limit for metadata cache size in bytes.
-                    format: int64
-                    type: integer
+                  metadataCacheSize:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 5000Mi
+                    description: Maximum size of the metadata cache.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  metadataCacheSizeLimit:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: Hard limit for metadata cache size.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
                   minContentSweepAge:
                     description: Minimum age (in seconds) of content before it can
                       be swept.

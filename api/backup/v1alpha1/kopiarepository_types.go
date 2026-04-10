@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -203,21 +204,21 @@ type KopiaRepositoryCachingSpec struct {
 	// +kubebuilder:default:="cache"
 	CacheDirectory string `json:"cacheDirectory,omitempty"`
 
-	// Maximum size of the content cache in bytes.
-	// +kubebuilder:default:=5242880000
-	ContentCacheSizeBytes int64 `json:"maxCacheSize,omitempty"`
+	// Maximum size of the content cache.
+	// +kubebuilder:default:="5000Mi"
+	ContentCacheSize resource.Quantity `json:"contentCacheSize,omitempty"`
 
-	// Hard limit for content cache size in bytes.
+	// Hard limit for content cache size.
 	// +optional
-	ContentCacheSizeLimitBytes int64 `json:"contentCacheSizeLimitBytes,omitempty"`
+	ContentCacheSizeLimit resource.Quantity `json:"contentCacheSizeLimit,omitempty"`
 
-	// Maximum size of the metadata cache in bytes.
-	// +kubebuilder:default:=5242880000
-	MetadataCacheSizeBytes int64 `json:"maxMetadataCacheSize,omitempty"`
+	// Maximum size of the metadata cache.
+	// +kubebuilder:default:="5000Mi"
+	MetadataCacheSize resource.Quantity `json:"metadataCacheSize,omitempty"`
 
-	// Hard limit for metadata cache size in bytes.
+	// Hard limit for metadata cache size.
 	// +optional
-	MetadataCacheSizeLimitBytes int64 `json:"metadataCacheSizeLimitBytes,omitempty"`
+	MetadataCacheSizeLimit resource.Quantity `json:"metadataCacheSizeLimit,omitempty"`
 
 	// Maximum duration (in seconds) to cache directory listings.
 	// +kubebuilder:default:=30

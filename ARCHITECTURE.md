@@ -81,10 +81,10 @@ type KopiaRepositorySpec struct {
 
 type KopiaRepositoryCachingSpec struct {
     CacheDirectory                  string
-    ContentCacheSizeBytes           int64  // Default: 5GB
-    ContentCacheSizeLimitBytes      int64
-    MetadataCacheSizeBytes          int64  // Default: 5GB
-    MetadataCacheSizeLimitBytes     int64
+    ContentCacheSize               resource.Quantity  // Default: "5000Mi"
+    ContentCacheSizeLimit          resource.Quantity
+    MetadataCacheSize              resource.Quantity  // Default: "5000Mi"
+    MetadataCacheSizeLimit         resource.Quantity
     MaxListCacheDuration            int64  // Default: 30 seconds
     MinMetadataSweepAge             int64
     MinContentSweepAge              int64

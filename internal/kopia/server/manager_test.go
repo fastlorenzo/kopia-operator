@@ -11,6 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -28,9 +29,9 @@ var _ = Describe("Server Manager Helpers", func() {
 
 		It("should include cache size flags when set", func() {
 			spec := backupv1alpha1.KopiaRepositoryCachingSpec{
-				ContentCacheSizeBytes:  500 * 1024 * 1024,
-				MetadataCacheSizeBytes: 100 * 1024 * 1024,
-				MaxListCacheDuration:   60,
+				ContentCacheSize:     resource.MustParse("500Mi"),
+				MetadataCacheSize:    resource.MustParse("100Mi"),
+				MaxListCacheDuration: 60,
 			}
 			flags := BuildCacheFlags(spec)
 			Expect(flags).To(ContainSubstring("--content-cache-size-mb=500"))

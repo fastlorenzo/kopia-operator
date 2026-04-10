@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
@@ -196,10 +197,10 @@ var _ = Describe("CronJob Builder", func() {
 
 		It("should include caching config when specified", func() {
 			repo.Spec.Caching = backupv1alpha1.KopiaRepositoryCachingSpec{
-				CacheDirectory:         "/cache",
-				ContentCacheSizeBytes:  1024 * 1024 * 1024,
-				MetadataCacheSizeBytes: 512 * 1024 * 1024,
-				MaxListCacheDuration:   60,
+				CacheDirectory:       "/cache",
+				ContentCacheSize:     resource.MustParse("1Gi"),
+				MetadataCacheSize:    resource.MustParse("512Mi"),
+				MaxListCacheDuration: 60,
 			}
 
 			cm, err := buildConfigMap(backup, repo)
