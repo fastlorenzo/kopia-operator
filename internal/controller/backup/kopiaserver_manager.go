@@ -1,0 +1,745 @@
+/*
+Copyright 2024.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package backup
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"net"
+	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
+)
+
+// KopiaServerManager manages the lifecycle of Kopia Server deployments.
+type KopiaServerManager struct {
+	Client client.Client
+	Scheme *runtime.Scheme
+}
+
+// NewKopiaServerManager creates a new KopiaServerManager.
+func NewKopiaServerManager(client client.Client, scheme *runtime.Scheme) *KopiaServerManager {
+	return &KopiaServerManager{
+		Client: client,
+		Scheme: scheme,
+	}
+}
+
+// EnsureServerDeployment ensures the Kopia Server Deployment exists and is up-to-date.
+func (m *KopiaServerManager) EnsureServerDeployment(
+	ctx context.Context,
+	repo *backupv1alpha1.KopiaRepository,
+) error {
+	logger := log.FromContext(ctx)
+	deploymentName := fmt.Sprintf("kopia-server-%s", repo.Name)
+
+	desired := m.constructServerDeployment(repo, deploymentName)
+	if err := ctrl.SetControllerReference(repo, desired, m.Scheme); err != nil {
+		return fmt.Errorf("failed to set controller reference on Deployment: %w", err)
+	}
+
+	existing := &appsv1.Deployment{}
+	err := m.Client.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: repo.Namespace}, existing)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to get Deployment %s: %w", deploymentName, err)
+		}
+		logger.Info("Creating Kopia Server Deployment", "name", deploymentName)
+		return m.Client.Create(ctx, desired)
+	}
+
+	existing.Spec = desired.Spec
+	logger.Info("Updating Kopia Server Deployment", "name", deploymentName)
+	return m.Client.Update(ctx, existing)
+}
+
+// EnsureServerService ensures the Kopia Server Service exists and is up-to-date.
+func (m *KopiaServerManager) EnsureServerService(
+	ctx context.Context,
+	repo *backupv1alpha1.KopiaRepository,
+) error {
+	logger := log.FromContext(ctx)
+	serviceName := fmt.Sprintf("kopia-server-%s", repo.Name)
+
+	desired := m.constructServerService(repo, serviceName)
+	if err := ctrl.SetControllerReference(repo, desired, m.Scheme); err != nil {
+		return fmt.Errorf("failed to set controller reference on Service: %w", err)
+	}
+
+	existing := &corev1.Service{}
+	err := m.Client.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: repo.Namespace}, existing)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to get Service %s: %w", serviceName, err)
+		}
+		logger.Info("Creating Kopia Server Service", "name", serviceName)
+		return m.Client.Create(ctx, desired)
+	}
+
+	existing.Spec.Ports = desired.Spec.Ports
+	existing.Spec.Type = desired.Spec.Type
+	existing.Spec.Selector = desired.Spec.Selector
+	logger.Info("Updating Kopia Server Service", "name", serviceName)
+	return m.Client.Update(ctx, existing)
+}
+
+// GetServerURL returns the in-cluster URL for the Kopia Server.
+func (m *KopiaServerManager) GetServerURL(repo *backupv1alpha1.KopiaRepository) string {
+	serviceName := fmt.Sprintf("kopia-server-%s", repo.Name)
+	port := int32(51515)
+	if repo.Spec.Server.Exposure.ServicePort != 0 {
+		port = repo.Spec.Server.Exposure.ServicePort
+	}
+	return fmt.Sprintf("https://%s.%s.svc.cluster.local:%d", serviceName, repo.Namespace, port)
+}
+
+// IsServerReady checks if the server deployment is ready.
+func (m *KopiaServerManager) IsServerReady(
+	ctx context.Context,
+	repo *backupv1alpha1.KopiaRepository,
+) (bool, error) {
+	deploymentName := fmt.Sprintf("kopia-server-%s", repo.Name)
+	deployment := &appsv1.Deployment{}
+	err := m.Client.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: repo.Namespace}, deployment)
+	if err != nil {
+		return false, fmt.Errorf("failed to get Deployment %s: %w", deploymentName, err)
+	}
+	return deployment.Status.ReadyReplicas == deployment.Status.Replicas && deployment.Status.Replicas > 0, nil
+}
+
+// constructServerDeployment builds the Deployment spec for the Kopia Server.
+func (m *KopiaServerManager) constructServerDeployment(
+	repo *backupv1alpha1.KopiaRepository,
+	deploymentName string,
+) *appsv1.Deployment {
+	replicas := int32(1)
+	if repo.Spec.Server.Replicas > 0 {
+		replicas = repo.Spec.Server.Replicas
+	}
+
+	image := "ghcr.io/fastlorenzo/kopia:latest"
+	if repo.Spec.Server.Image != "" {
+		image = repo.Spec.Server.Image
+	}
+
+	labels := map[string]string{
+		"app":                          "kopia-server",
+		"kopia-repository":             repo.Name,
+		"app.kubernetes.io/name":       "kopia-server",
+		"app.kubernetes.io/instance":   repo.Name,
+		"app.kubernetes.io/managed-by": "kopia-operator",
+	}
+
+	tlsSecretName := m.getTLSSecretName(repo)
+
+	env := []corev1.EnvVar{
+		{
+			Name: "KOPIA_PASSWORD",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: m.getRepositoryPasswordSecretKeyRef(repo),
+			},
+		},
+		{
+			Name:  "KOPIA_SERVER_USERNAME",
+			Value: fmt.Sprintf("%s@%s", repo.Spec.Username, repo.Spec.Hostname),
+		},
+		{
+			Name: "KOPIA_SERVER_PASSWORD",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: m.getServerAdminPasswordSecretKeyRef(repo),
+			},
+		},
+		{
+			Name: "KOPIA_TLS_FINGERPRINT",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: tlsSecretName},
+					Key:                  "fingerprint",
+					Optional:             func(b bool) *bool { return &b }(true),
+				},
+			},
+		},
+	}
+
+	volumeMounts := []corev1.VolumeMount{
+		{Name: "cache", MountPath: "/cache"},
+		{Name: "config", MountPath: "/config"},
+		{Name: "tls", MountPath: "/tls", ReadOnly: true},
+	}
+
+	volumes := []corev1.Volume{
+		{Name: "cache", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{
+			Name: "tls",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  tlsSecretName,
+					DefaultMode: int32Ptr(0400),
+				},
+			},
+		},
+	}
+
+	switch repo.Spec.StorageType {
+	case backupv1alpha1.StorageTypeFilesystem:
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{Name: "repository", MountPath: "/repository"})
+		volumes = append(volumes, m.constructStorageVolume(repo))
+	case backupv1alpha1.StorageTypeSFTP:
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name: "sftp-credentials", MountPath: "/sftp-creds", ReadOnly: true,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: "sftp-credentials",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  repo.Spec.SFTPOptions.CredentialsSecret,
+					DefaultMode: int32Ptr(0600),
+				},
+			},
+		})
+	}
+
+	serverCmd := m.constructServerCommand(repo)
+
+	container := corev1.Container{
+		Name:            "kopia-server",
+		Image:           image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"/bin/sh", "-c"},
+		Args:            []string{serverCmd},
+		Env:             env,
+		VolumeMounts:    volumeMounts,
+		Ports: []corev1.ContainerPort{
+			{Name: "api", ContainerPort: 51515, Protocol: corev1.ProtocolTCP},
+		},
+		Resources: repo.Spec.Server.Resources,
+		LivenessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(51515)},
+			},
+			InitialDelaySeconds: 30,
+			PeriodSeconds:       10,
+			TimeoutSeconds:      5,
+			FailureThreshold:    3,
+		},
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				Exec: &corev1.ExecAction{
+					Command: []string{"/bin/sh", "-c",
+						`FINGERPRINT="${KOPIA_TLS_FINGERPRINT:-$(openssl x509 -in /tls/tls.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':')}" && ` +
+							`kopia server status --address=https://127.0.0.1:51515 --server-username=admin --server-password="$KOPIA_SERVER_PASSWORD" --server-cert-fingerprint=$FINGERPRINT`,
+					},
+				},
+			},
+			InitialDelaySeconds: 10,
+			PeriodSeconds:       5,
+			TimeoutSeconds:      5,
+			FailureThreshold:    3,
+		},
+	}
+
+	if container.Resources.Requests == nil {
+		container.Resources.Requests = corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+		}
+	}
+	if container.Resources.Limits == nil {
+		container.Resources.Limits = corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+			corev1.ResourceCPU:    resource.MustParse("1000m"),
+		}
+	}
+
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      deploymentName,
+			Namespace: repo.Namespace,
+			Labels:    labels,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{container},
+					Volumes:    volumes,
+				},
+			},
+		},
+	}
+}
+
+// constructServerService builds the Service spec for the Kopia Server.
+func (m *KopiaServerManager) constructServerService(
+	repo *backupv1alpha1.KopiaRepository,
+	serviceName string,
+) *corev1.Service {
+	labels := map[string]string{
+		"app":                          "kopia-server",
+		"kopia-repository":             repo.Name,
+		"app.kubernetes.io/name":       "kopia-server",
+		"app.kubernetes.io/instance":   repo.Name,
+		"app.kubernetes.io/managed-by": "kopia-operator",
+	}
+
+	serviceType := corev1.ServiceTypeClusterIP
+	if repo.Spec.Server.Exposure.ServiceType != "" {
+		serviceType = repo.Spec.Server.Exposure.ServiceType
+	}
+
+	servicePort := int32(51515)
+	if repo.Spec.Server.Exposure.ServicePort != 0 {
+		servicePort = repo.Spec.Server.Exposure.ServicePort
+	}
+
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      serviceName,
+			Namespace: repo.Namespace,
+			Labels:    labels,
+		},
+		Spec: corev1.ServiceSpec{
+			Type:     serviceType,
+			Selector: labels,
+			Ports: []corev1.ServicePort{
+				{Name: "api", Port: servicePort, TargetPort: intstr.FromInt(51515), Protocol: corev1.ProtocolTCP},
+			},
+		},
+	}
+}
+
+// constructStorageVolume creates the volume for the repository storage.
+func (m *KopiaServerManager) constructStorageVolume(repo *backupv1alpha1.KopiaRepository) corev1.Volume {
+	volume := corev1.Volume{Name: "repository"}
+
+	if repo.Spec.FileSystemOptions.NFSServer != "" {
+		volume.VolumeSource = corev1.VolumeSource{
+			NFS: &corev1.NFSVolumeSource{
+				Server: repo.Spec.FileSystemOptions.NFSServer,
+				Path:   repo.Spec.FileSystemOptions.NFSPath,
+			},
+		}
+	} else {
+		hostPathType := corev1.HostPathDirectoryOrCreate
+		volume.VolumeSource = corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: repo.Spec.FileSystemOptions.Path,
+				Type: &hostPathType,
+			},
+		}
+	}
+
+	return volume
+}
+
+// buildCacheFlags generates Kopia cache configuration flags from repository spec.
+func buildCacheFlags(caching backupv1alpha1.KopiaRepositoryCachingSpec) string {
+	flags := ""
+	if caching.CacheDirectory != "" {
+		flags += fmt.Sprintf(" --cache-directory=%s", caching.CacheDirectory)
+	}
+	if caching.ContentCacheSizeBytes > 0 {
+		flags += fmt.Sprintf(" --content-cache-size-mb=%d", caching.ContentCacheSizeBytes/(1024*1024))
+	}
+	if caching.ContentCacheSizeLimitBytes > 0 {
+		flags += fmt.Sprintf(" --content-cache-size-limit-mb=%d", caching.ContentCacheSizeLimitBytes/(1024*1024))
+	}
+	if caching.MetadataCacheSizeBytes > 0 {
+		flags += fmt.Sprintf(" --metadata-cache-size-mb=%d", caching.MetadataCacheSizeBytes/(1024*1024))
+	}
+	if caching.MetadataCacheSizeLimitBytes > 0 {
+		flags += fmt.Sprintf(" --metadata-cache-size-limit-mb=%d", caching.MetadataCacheSizeLimitBytes/(1024*1024))
+	}
+	if caching.MaxListCacheDuration > 0 {
+		flags += fmt.Sprintf(" --max-list-cache-duration=%ds", caching.MaxListCacheDuration)
+	}
+	if caching.MinMetadataSweepAge > 0 {
+		flags += fmt.Sprintf(" --min-metadata-sweep-age=%ds", caching.MinMetadataSweepAge)
+	}
+	if caching.MinContentSweepAge > 0 {
+		flags += fmt.Sprintf(" --min-content-sweep-age=%ds", caching.MinContentSweepAge)
+	}
+	if caching.MinIndexSweepAge > 0 {
+		flags += fmt.Sprintf(" --min-index-sweep-age=%ds", caching.MinIndexSweepAge)
+	}
+	return flags
+}
+
+// constructServerCommand builds the command to start the Kopia Server.
+func (m *KopiaServerManager) constructServerCommand(repo *backupv1alpha1.KopiaRepository) string {
+	cacheFlags := buildCacheFlags(repo.Spec.Caching)
+
+	var repoConnect string
+	switch repo.Spec.StorageType {
+	case backupv1alpha1.StorageTypeFilesystem:
+		repoConnect = fmt.Sprintf(
+			"kopia repository connect filesystem --path=/repository --override-hostname=%s --override-username=%s%s",
+			repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+	case backupv1alpha1.StorageTypeSFTP:
+		port := 22
+		if repo.Spec.SFTPOptions.Port > 0 {
+			port = repo.Spec.SFTPOptions.Port
+		}
+		sftpCmd := fmt.Sprintf("kopia repository connect sftp --host=%s --port=%d --path=%s",
+			repo.Spec.SFTPOptions.Host, port, repo.Spec.SFTPOptions.Path)
+
+		repoConnect = fmt.Sprintf(`
+SFTP_USER=$(cat /sftp-creds/username 2>/dev/null || echo "")
+SFTP_PASSWORD=$(cat /sftp-creds/password 2>/dev/null || echo "")
+SFTP_KEY=$(cat /sftp-creds/keyData 2>/dev/null || echo "")
+if [ -z "$SFTP_USER" ]; then echo "ERROR: SFTP username not found in secret"; exit 1; fi
+SFTP_CMD="%s --username=$SFTP_USER"
+if [ -n "$SFTP_KEY" ]; then
+  echo "$SFTP_KEY" > /tmp/ssh_key && chmod 600 /tmp/ssh_key
+  SFTP_CMD="$SFTP_CMD --keyfile=/tmp/ssh_key"
+elif [ -n "$SFTP_PASSWORD" ]; then
+  SFTP_CMD="$SFTP_CMD --sftp-password=$SFTP_PASSWORD"
+else
+  echo "ERROR: Neither keyData nor password found in secret"; exit 1
+fi`, sftpCmd)
+
+		if repo.Spec.SFTPOptions.KnownHostsData != "" {
+			repoConnect += fmt.Sprintf(`
+echo "%s" > /tmp/known_hosts
+SFTP_CMD="$SFTP_CMD --known-hosts=/tmp/known_hosts"`, repo.Spec.SFTPOptions.KnownHostsData)
+		}
+		if repo.Spec.SFTPOptions.ExternalSSH {
+			sshCmd := "ssh"
+			if repo.Spec.SFTPOptions.SSHCommand != "" {
+				sshCmd = repo.Spec.SFTPOptions.SSHCommand
+			}
+			repoConnect += fmt.Sprintf(`
+SFTP_CMD="$SFTP_CMD --external-ssh --ssh-command=%s"`, sshCmd)
+		}
+		repoConnect += fmt.Sprintf(`
+SFTP_CMD="$SFTP_CMD --override-hostname=%s --override-username=%s%s"
+eval "$SFTP_CMD"`, repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+	default:
+		repoConnect = fmt.Sprintf("echo 'Unsupported storage type: %s' && exit 1", repo.Spec.StorageType)
+	}
+
+	serverStart := "kopia server start --tls-cert-file=/tls/tls.crt --tls-key-file=/tls/tls.key " +
+		"--address=0.0.0.0:51515 --server-control-username=admin " +
+		"--server-control-password=\"${KOPIA_SERVER_PASSWORD}\""
+	for _, arg := range repo.Spec.Server.ExtraArgs {
+		serverStart += " " + arg
+	}
+
+	adminUserSetup := fmt.Sprintf(`
+ADMIN_USER="%s@%s"
+echo "Checking admin user: $ADMIN_USER"
+set +e
+kopia server user list 2>/dev/null | grep -q "$ADMIN_USER"
+USER_EXISTS=$?
+set -e
+if [ $USER_EXISTS -ne 0 ]; then
+  echo "Creating admin user: $ADMIN_USER"
+  kopia server user add "$ADMIN_USER" --user-password="${KOPIA_PASSWORD}"
+else
+  echo "Updating admin user password: $ADMIN_USER"
+  kopia server user set "$ADMIN_USER" --user-password="${KOPIA_PASSWORD}"
+fi`, repo.Spec.Username, repo.Spec.Hostname)
+
+	switch repo.Spec.StorageType {
+	case backupv1alpha1.StorageTypeFilesystem:
+		return fmt.Sprintf(`set -e
+echo "Connecting to repository..."
+%s || {
+  echo "Repository connection failed, attempting to create..."
+  kopia repository create filesystem --path=/repository --override-hostname=%s --override-username=%s%s
+}
+echo "Setting up admin user..."
+%s
+echo "Starting Kopia Server..."
+%s`, repoConnect, repo.Spec.Hostname, repo.Spec.Username, cacheFlags, adminUserSetup, serverStart)
+
+	case backupv1alpha1.StorageTypeSFTP:
+		port := 22
+		if repo.Spec.SFTPOptions.Port > 0 {
+			port = repo.Spec.SFTPOptions.Port
+		}
+		sftpCreateCmd := fmt.Sprintf("kopia repository create sftp --host=%s --port=%d --path=%s",
+			repo.Spec.SFTPOptions.Host, port, repo.Spec.SFTPOptions.Path)
+
+		createCmd := fmt.Sprintf(`SFTP_CREATE_CMD="%s --username=$SFTP_USER"
+if [ -n "$SFTP_KEY" ]; then
+  SFTP_CREATE_CMD="$SFTP_CREATE_CMD --keyfile=/tmp/ssh_key"
+elif [ -n "$SFTP_PASSWORD" ]; then
+  SFTP_CREATE_CMD="$SFTP_CREATE_CMD --sftp-password=$SFTP_PASSWORD"
+fi`, sftpCreateCmd)
+
+		if repo.Spec.SFTPOptions.KnownHostsData != "" {
+			createCmd += `
+SFTP_CREATE_CMD="$SFTP_CREATE_CMD --known-hosts=/tmp/known_hosts"`
+		}
+		if repo.Spec.SFTPOptions.ExternalSSH {
+			sshCmd := "ssh"
+			if repo.Spec.SFTPOptions.SSHCommand != "" {
+				sshCmd = repo.Spec.SFTPOptions.SSHCommand
+			}
+			createCmd += fmt.Sprintf(`
+SFTP_CREATE_CMD="$SFTP_CREATE_CMD --external-ssh --ssh-command=%s"`, sshCmd)
+		}
+		createCmd += fmt.Sprintf(`
+SFTP_CREATE_CMD="$SFTP_CREATE_CMD --override-hostname=%s --override-username=%s%s"`,
+			repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+
+		return fmt.Sprintf(`echo "Connecting to repository..."
+%s
+if [ $? -ne 0 ]; then
+  echo "Repository connection failed, attempting to create..."
+%s
+  eval "$SFTP_CREATE_CMD"
+  if [ $? -eq 0 ]; then
+    echo "Repository created successfully, reconnecting..."
+    eval "$SFTP_CMD"
+  else
+    echo "Failed to create repository"; exit 1
+  fi
+fi
+set -e
+echo "Starting Kopia Server..."
+%s
+%s`, repoConnect, createCmd, adminUserSetup, serverStart)
+
+	default:
+		return fmt.Sprintf(`set -e
+echo "Connecting to repository..."
+%s
+echo "Starting Kopia Server..."
+%s
+%s`, repoConnect, adminUserSetup, serverStart)
+	}
+}
+
+// getRepositoryPasswordSecretKeyRef returns the secret key reference for the repository password.
+func (m *KopiaServerManager) getRepositoryPasswordSecretKeyRef(repo *backupv1alpha1.KopiaRepository) *corev1.SecretKeySelector {
+	return &corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{
+			Name: repo.Spec.PasswordSecretName,
+		},
+		Key: "KOPIA_PASSWORD",
+	}
+}
+
+// getServerAdminPasswordSecretKeyRef returns the secret key reference for the server admin password.
+func (m *KopiaServerManager) getServerAdminPasswordSecretKeyRef(repo *backupv1alpha1.KopiaRepository) *corev1.SecretKeySelector {
+	if repo.Spec.Server.AdminPasswordSecretName != "" {
+		return &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{
+				Name: repo.Spec.Server.AdminPasswordSecretName,
+			},
+			Key: "password",
+		}
+	}
+	// Fall back to repository password.
+	return m.getRepositoryPasswordSecretKeyRef(repo)
+}
+
+// getTLSSecretName returns the name of the TLS secret for the server.
+func (m *KopiaServerManager) getTLSSecretName(repo *backupv1alpha1.KopiaRepository) string {
+	if repo.Spec.Server.TLS.SecretName != "" {
+		return repo.Spec.Server.TLS.SecretName
+	}
+	return fmt.Sprintf("kopia-server-tls-%s", repo.Name)
+}
+
+// EnsureTLSSecret ensures TLS certificates exist for the Kopia Server.
+// Returns the SHA256 fingerprint of the certificate.
+func (m *KopiaServerManager) EnsureTLSSecret(
+	ctx context.Context,
+	repo *backupv1alpha1.KopiaRepository,
+) (string, error) {
+	logger := log.FromContext(ctx)
+	tlsSecretName := m.getTLSSecretName(repo)
+
+	secret := &corev1.Secret{}
+	err := m.Client.Get(ctx, types.NamespacedName{Name: tlsSecretName, Namespace: repo.Namespace}, secret)
+
+	if err == nil {
+		if repo.Spec.Server.TLS.SecretName != "" {
+			certPEM, ok := secret.Data["tls.crt"]
+			if !ok {
+				return "", fmt.Errorf("TLS secret %s missing 'tls.crt' key", tlsSecretName)
+			}
+			if _, ok := secret.Data["tls.key"]; !ok {
+				return "", fmt.Errorf("TLS secret %s missing 'tls.key' key", tlsSecretName)
+			}
+			fingerprint, err := calculateCertFingerprint(certPEM)
+			if err != nil {
+				return "", fmt.Errorf("failed to calculate fingerprint from user-provided cert: %w", err)
+			}
+			logger.Info("Using user-provided TLS secret", "name", tlsSecretName, "fingerprint", fingerprint)
+			return fingerprint, nil
+		}
+		if fingerprint, ok := secret.Data["fingerprint"]; ok {
+			return string(fingerprint), nil
+		}
+		fingerprint, err := calculateCertFingerprint(secret.Data["tls.crt"])
+		if err != nil {
+			return "", fmt.Errorf("failed to calculate fingerprint: %w", err)
+		}
+		return fingerprint, nil
+	}
+
+	if !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("failed to get TLS secret %s: %w", tlsSecretName, err)
+	}
+
+	if repo.Spec.Server.TLS.SecretName != "" {
+		return "", fmt.Errorf("TLS secret %s not found — create it with 'tls.crt' and 'tls.key' keys", tlsSecretName)
+	}
+
+	logger.Info("Auto-generating TLS certificate", "name", tlsSecretName)
+
+	serviceName := fmt.Sprintf("kopia-server-%s", repo.Name)
+	servicePort := int32(51515)
+	if repo.Spec.Server.Exposure.ServicePort != 0 {
+		servicePort = repo.Spec.Server.Exposure.ServicePort
+	}
+
+	dnsNames := []string{
+		serviceName,
+		fmt.Sprintf("%s.%s", serviceName, repo.Namespace),
+		fmt.Sprintf("%s.%s.svc", serviceName, repo.Namespace),
+		fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, repo.Namespace),
+	}
+	dnsNames = append(dnsNames, repo.Spec.Server.TLS.CertificateDNSNames...)
+
+	commonName := repo.Spec.Server.TLS.CertificateCommonName
+	if commonName == "" {
+		commonName = fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, repo.Namespace)
+	}
+
+	certPEM, keyPEM, err := generateSelfSignedCert(commonName, dnsNames, servicePort)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate TLS certificate: %w", err)
+	}
+
+	fingerprint, err := calculateCertFingerprint(certPEM)
+	if err != nil {
+		return "", fmt.Errorf("failed to calculate fingerprint: %w", err)
+	}
+
+	tlsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tlsSecretName,
+			Namespace: repo.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "kopia-server",
+				"app.kubernetes.io/instance":   repo.Name,
+				"app.kubernetes.io/managed-by": "kopia-operator",
+			},
+		},
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"tls.crt":     certPEM,
+			"tls.key":     keyPEM,
+			"fingerprint": []byte(fingerprint),
+		},
+	}
+
+	if err := ctrl.SetControllerReference(repo, tlsSecret, m.Scheme); err != nil {
+		return "", fmt.Errorf("failed to set controller reference on TLS secret: %w", err)
+	}
+
+	logger.Info("Creating TLS Secret", "name", tlsSecretName, "fingerprint", fingerprint)
+	if err := m.Client.Create(ctx, tlsSecret); err != nil {
+		return "", fmt.Errorf("failed to create TLS secret %s: %w", tlsSecretName, err)
+	}
+
+	return fingerprint, nil
+}
+
+// calculateCertFingerprint calculates the SHA256 fingerprint of a PEM-encoded certificate.
+func calculateCertFingerprint(certPEM []byte) (string, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return "", fmt.Errorf("failed to decode PEM block")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse certificate: %w", err)
+	}
+	hash := sha256.Sum256(cert.Raw)
+	return fmt.Sprintf("%X", hash), nil
+}
+
+// generateSelfSignedCert generates a self-signed TLS certificate.
+func generateSelfSignedCert(commonName string, dnsNames []string, _ int32) ([]byte, []byte, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate private key: %w", err)
+	}
+
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate serial number: %w", err)
+	}
+
+	notBefore := time.Now()
+	notAfter := notBefore.Add(365 * 24 * time.Hour * 10)
+
+	allDNSNames := append([]string{"localhost"}, dnsNames...)
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   commonName,
+			Organization: []string{"kopia-operator"},
+		},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              allDNSNames,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create certificate: %w", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
+
+	return certPEM, keyPEM, nil
+}

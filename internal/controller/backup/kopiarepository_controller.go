@@ -18,10 +18,15 @@ package backup
 
 import (
 	"context"
+	"fmt"
+	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -32,12 +37,18 @@ import (
 // KopiaRepositoryReconciler reconciles a KopiaRepository object.
 type KopiaRepositoryReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+
+	// ServerManager manages Kopia Server deployments (optional, for server mode).
+	ServerManager *KopiaServerManager
 }
 
 // +kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
 func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
@@ -58,10 +69,107 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			Message:            "spec.passwordSecretName must be set",
 			ObservedGeneration: repo.Generation,
 		})
-		if err := r.Status().Update(ctx, &repo); err != nil {
-			return ctrl.Result{}, err
-		}
+		_ = r.Status().Update(ctx, &repo)
 		return ctrl.Result{}, nil
+	}
+
+	// --- Server mode ---
+	if repo.Spec.Server.Enabled {
+		if r.ServerManager == nil {
+			meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+				Type:               backupv1alpha1.ConditionTypeRepositoryReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             backupv1alpha1.ReasonServerFailed,
+				Message:            "Server mode requires ServerManager to be configured",
+				ObservedGeneration: repo.Generation,
+			})
+			_ = r.Status().Update(ctx, &repo)
+			return ctrl.Result{}, fmt.Errorf("ServerManager not configured for server mode")
+		}
+
+		// Ensure TLS certificates
+		fingerprint, err := r.ServerManager.EnsureTLSSecret(ctx, &repo)
+		if err != nil {
+			meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+				Type:               backupv1alpha1.ConditionTypeServerReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             backupv1alpha1.ReasonServerFailed,
+				Message:            fmt.Sprintf("Failed to ensure TLS: %v", err),
+				ObservedGeneration: repo.Generation,
+			})
+			_ = r.Status().Update(ctx, &repo)
+			r.Recorder.Event(&repo, corev1.EventTypeWarning, "TLSFailed", err.Error())
+			return ctrl.Result{}, fmt.Errorf("failed to ensure TLS secret: %w", err)
+		}
+		repo.Status.TLSCertFingerprint = fingerprint
+
+		// Ensure server deployment
+		if err := r.ServerManager.EnsureServerDeployment(ctx, &repo); err != nil {
+			meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+				Type:               backupv1alpha1.ConditionTypeServerReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             backupv1alpha1.ReasonServerFailed,
+				Message:            fmt.Sprintf("Failed to ensure Deployment: %v", err),
+				ObservedGeneration: repo.Generation,
+			})
+			_ = r.Status().Update(ctx, &repo)
+			r.Recorder.Event(&repo, corev1.EventTypeWarning, "DeploymentFailed", err.Error())
+			return ctrl.Result{}, fmt.Errorf("failed to ensure server deployment: %w", err)
+		}
+
+		// Ensure server service
+		if err := r.ServerManager.EnsureServerService(ctx, &repo); err != nil {
+			meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+				Type:               backupv1alpha1.ConditionTypeServerReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             backupv1alpha1.ReasonServerFailed,
+				Message:            fmt.Sprintf("Failed to ensure Service: %v", err),
+				ObservedGeneration: repo.Generation,
+			})
+			_ = r.Status().Update(ctx, &repo)
+			r.Recorder.Event(&repo, corev1.EventTypeWarning, "ServiceFailed", err.Error())
+			return ctrl.Result{}, fmt.Errorf("failed to ensure server service: %w", err)
+		}
+
+		// Check readiness
+		ready, err := r.ServerManager.IsServerReady(ctx, &repo)
+		if err != nil {
+			log.Error(err, "Failed to check server readiness")
+		}
+
+		repo.Status.ServerReady = ready
+		repo.Status.ServerURL = r.ServerManager.GetServerURL(&repo)
+		repo.Status.ServerDeployment = fmt.Sprintf("kopia-server-%s", repo.Name)
+		repo.Status.ServerService = fmt.Sprintf("kopia-server-%s", repo.Name)
+
+		if ready {
+			meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+				Type:               backupv1alpha1.ConditionTypeServerReady,
+				Status:             metav1.ConditionTrue,
+				Reason:             backupv1alpha1.ReasonServerDeployed,
+				Message:            "Kopia Server is deployed and ready",
+				ObservedGeneration: repo.Generation,
+			})
+			r.Recorder.Event(&repo, corev1.EventTypeNormal, "ServerReady", "Kopia Server is deployed and ready")
+		} else {
+			meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+				Type:               backupv1alpha1.ConditionTypeServerReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             backupv1alpha1.ReasonServerFailed,
+				Message:            "Kopia Server deployment is not ready yet",
+				ObservedGeneration: repo.Generation,
+			})
+			// Requeue to check readiness again
+			meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+				Type:               backupv1alpha1.ConditionTypeRepositoryReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             backupv1alpha1.ReasonServerFailed,
+				Message:            "Waiting for Kopia Server to be ready",
+				ObservedGeneration: repo.Generation,
+			})
+			_ = r.Status().Update(ctx, &repo)
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
 	}
 
 	// All checks passed
@@ -73,7 +181,7 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		ObservedGeneration: repo.Generation,
 	})
 	if err := r.Status().Update(ctx, &repo); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
 	return ctrl.Result{}, nil
@@ -83,5 +191,7 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 func (r *KopiaRepositoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupv1alpha1.KopiaRepository{}).
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
 		Complete(r)
 }

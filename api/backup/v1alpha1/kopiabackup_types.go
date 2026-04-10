@@ -40,6 +40,34 @@ const (
 	ReasonSuspended = "Suspended"
 )
 
+// BackupStatus represents the status of a backup operation.
+// +kubebuilder:validation:Enum=Successful;Failed;Pending;InProgress
+type BackupStatus string
+
+const (
+	BackupStatusSuccessful BackupStatus = "Successful"
+	BackupStatusFailed     BackupStatus = "Failed"
+	BackupStatusPending    BackupStatus = "Pending"
+	BackupStatusInProgress BackupStatus = "InProgress"
+)
+
+// BackupHistoryEntry represents a single backup execution record.
+type BackupHistoryEntry struct {
+	// Timestamp of when the backup was started.
+	StartTime metav1.Time `json:"startTime"`
+	// Timestamp of when the backup completed (nil if still running).
+	// +optional
+	CompletionTime *metav1.Time `json:"completionTime,omitempty"`
+	// Status of the backup.
+	Status BackupStatus `json:"status"`
+	// Name of the Job that executed this backup.
+	// +optional
+	JobName string `json:"jobName,omitempty"`
+	// Additional details about the backup status.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // KopiaBackupSpec defines the desired state of KopiaBackup.
 type KopiaBackupSpec struct {
 	// Name of the PVC to back up.
@@ -57,6 +85,11 @@ type KopiaBackupSpec struct {
 	// Suspend the CronJob when set to true.
 	// +kubebuilder:default:=false
 	Suspend bool `json:"suspend,omitempty"`
+
+	// Server user credentials secret name (auto-populated by the operator in server mode).
+	// Contains username and password for authenticating to the Kopia Server.
+	// +optional
+	UserCredentialsSecret string `json:"userCredentialsSecret,omitempty"`
 }
 
 // KopiaBackupStatus defines the observed state of KopiaBackup.
@@ -78,6 +111,34 @@ type KopiaBackupStatus struct {
 	// Node where the pod using the PVC is running.
 	// +optional
 	NodeName string `json:"nodeName,omitempty"`
+
+	// Server URL when server mode is enabled.
+	// +optional
+	ServerURL string `json:"serverURL,omitempty"`
+
+	// Username for server authentication.
+	// +optional
+	Username string `json:"username,omitempty"`
+
+	// Whether the backup is connected to the server.
+	// +optional
+	Connected bool `json:"connected,omitempty"`
+
+	// Status of the last backup.
+	// +optional
+	LastBackupStatus BackupStatus `json:"lastBackupStatus,omitempty"`
+
+	// Timestamp of the last backup attempt (regardless of outcome).
+	// +optional
+	LastBackupTime *metav1.Time `json:"lastBackupTime,omitempty"`
+
+	// Timestamp of the last successful backup.
+	// +optional
+	LastSuccessfulBackupTime *metav1.Time `json:"lastSuccessfulBackupTime,omitempty"`
+
+	// History of the last 10 backup executions.
+	// +optional
+	BackupHistory []BackupHistoryEntry `json:"backupHistory,omitempty"`
 }
 
 // +kubebuilder:object:root=true

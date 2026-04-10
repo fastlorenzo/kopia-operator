@@ -103,18 +103,33 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Create shared server manager for Kopia Server mode
+	serverManager := backupcontroller.NewKopiaServerManager(mgr.GetClient(), mgr.GetScheme())
+
+	// Create user manager for Kopia Server mode (requires REST config for kubectl exec)
+	restConfig := ctrl.GetConfigOrDie()
+	userManager, err := backupcontroller.NewKopiaUserManager(mgr.GetClient(), mgr.GetScheme(), restConfig)
+	if err != nil {
+		setupLog.Error(err, "unable to create KopiaUserManager")
+		os.Exit(1)
+	}
+
 	if err = (&backupcontroller.KopiaBackupReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		Recorder:   mgr.GetEventRecorderFor("kopiabackup-controller"),
-		KopiaImage: kopiaImage,
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorderFor("kopiabackup-controller"),
+		KopiaImage:    kopiaImage,
+		ServerManager: serverManager,
+		UserManager:   userManager,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KopiaBackup")
 		os.Exit(1)
 	}
 	if err = (&backupcontroller.KopiaRepositoryReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorderFor("kopiarepository-controller"),
+		ServerManager: serverManager,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KopiaRepository")
 		os.Exit(1)

@@ -255,6 +255,15 @@ var _ = Describe("KopiaBackup Controller", func() {
 
 	Context("buildConfigMap", func() {
 		It("should produce valid JSON in repository.config", func() {
+			backup := &backupv1alpha1.KopiaBackup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-backup",
+					Namespace: "default",
+				},
+				Spec: backupv1alpha1.KopiaBackupSpec{
+					Repository: "test-repo",
+				},
+			}
 			repo := &backupv1alpha1.KopiaRepository{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-repo"},
 				Spec: backupv1alpha1.KopiaRepositorySpec{
@@ -270,7 +279,8 @@ var _ = Describe("KopiaBackup Controller", func() {
 					},
 				},
 			}
-			cm := buildConfigMap("kopia-config-test-repo", "default", repo)
+			cm, err := buildConfigMap(backup, repo)
+			Expect(err).NotTo(HaveOccurred())
 			Expect(cm.Data).To(HaveKey("repository.config"))
 			Expect(cm.Data["repository.config"]).To(ContainSubstring(`"hostname": "myhost"`))
 			Expect(cm.Data["repository.config"]).To(ContainSubstring(`"username": "myuser"`))

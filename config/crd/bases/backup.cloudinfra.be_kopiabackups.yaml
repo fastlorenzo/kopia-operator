@@ -74,6 +74,11 @@ spec:
                 default: false
                 description: Suspend the CronJob when set to true.
                 type: boolean
+              userCredentialsSecret:
+                description: |-
+                  Server user credentials secret name (auto-populated by the operator in server mode).
+                  Contains username and password for authenticating to the Kopia Server.
+                type: string
             required:
             - pvcName
             - repository
@@ -82,6 +87,40 @@ spec:
           status:
             description: KopiaBackupStatus defines the observed state of KopiaBackup.
             properties:
+              backupHistory:
+                description: History of the last 10 backup executions.
+                items:
+                  description: BackupHistoryEntry represents a single backup execution
+                    record.
+                  properties:
+                    completionTime:
+                      description: Timestamp of when the backup completed (nil if
+                        still running).
+                      format: date-time
+                      type: string
+                    jobName:
+                      description: Name of the Job that executed this backup.
+                      type: string
+                    message:
+                      description: Additional details about the backup status.
+                      type: string
+                    startTime:
+                      description: Timestamp of when the backup was started.
+                      format: date-time
+                      type: string
+                    status:
+                      description: Status of the backup.
+                      enum:
+                      - Successful
+                      - Failed
+                      - Pending
+                      - InProgress
+                      type: string
+                  required:
+                  - startTime
+                  - status
+                  type: object
+                type: array
               conditions:
                 description: Conditions represent the latest available observations
                   of the backup's state.
@@ -143,6 +182,9 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              connected:
+                description: Whether the backup is connected to the server.
+                type: boolean
               cronJobName:
                 description: Name of the CronJob managed by this backup.
                 type: string
@@ -150,8 +192,30 @@ spec:
                 description: Whether this KopiaBackup was auto-created from a PVC
                   annotation.
                 type: boolean
+              lastBackupStatus:
+                description: Status of the last backup.
+                enum:
+                - Successful
+                - Failed
+                - Pending
+                - InProgress
+                type: string
+              lastBackupTime:
+                description: Timestamp of the last backup attempt (regardless of outcome).
+                format: date-time
+                type: string
+              lastSuccessfulBackupTime:
+                description: Timestamp of the last successful backup.
+                format: date-time
+                type: string
               nodeName:
                 description: Node where the pod using the PVC is running.
+                type: string
+              serverURL:
+                description: Server URL when server mode is enabled.
+                type: string
+              username:
+                description: Username for server authentication.
                 type: string
             type: object
         type: object

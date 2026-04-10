@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -32,6 +33,8 @@ const (
 const (
 	// ConditionTypeRepositoryReady indicates the repository configuration is valid.
 	ConditionTypeRepositoryReady = "Ready"
+	// ConditionTypeServerReady indicates the Kopia Server is deployed and ready.
+	ConditionTypeServerReady = "ServerReady"
 
 	// ReasonConfigValid indicates the repository configuration passed validation.
 	ReasonConfigValid = "ConfigValid"
@@ -39,7 +42,96 @@ const (
 	ReasonMissingPassword = "MissingPassword"
 	// ReasonUnsupportedStorage indicates an unsupported storage type.
 	ReasonUnsupportedStorage = "UnsupportedStorage"
+	// ReasonServerDeployed indicates the Kopia Server is deployed and running.
+	ReasonServerDeployed = "ServerDeployed"
+	// ReasonServerFailed indicates the Kopia Server failed to deploy.
+	ReasonServerFailed = "ServerFailed"
 )
+
+// KopiaServerTLSSpec defines TLS configuration for the Kopia Server.
+// TLS is always enabled as Kopia requires HTTPS for server connections.
+type KopiaServerTLSSpec struct {
+	// Name of the secret containing TLS certificate and key.
+	// Secret should contain 'tls.crt' and 'tls.key' keys.
+	// If not provided, a self-signed certificate will be auto-generated.
+	// +optional
+	SecretName string `json:"secretName,omitempty"`
+
+	// CertificateCommonName is the CN for the auto-generated certificate.
+	// Defaults to the service name.
+	// +optional
+	CertificateCommonName string `json:"certificateCommonName,omitempty"`
+
+	// CertificateDNSNames are additional DNS names for the auto-generated certificate.
+	// The service name is always included automatically.
+	// +optional
+	CertificateDNSNames []string `json:"certificateDNSNames,omitempty"`
+}
+
+// KopiaServerExposureSpec defines how the Kopia Server should be exposed.
+type KopiaServerExposureSpec struct {
+	// Type of exposure.
+	// +kubebuilder:validation:Enum=Service;""
+	// +kubebuilder:default:=Service
+	// +optional
+	Type string `json:"type,omitempty"`
+
+	// Kubernetes Service type.
+	// +kubebuilder:default:=ClusterIP
+	// +optional
+	ServiceType corev1.ServiceType `json:"serviceType,omitempty"`
+
+	// Port for the Kopia Server service.
+	// +kubebuilder:default:=51515
+	// +optional
+	ServicePort int32 `json:"servicePort,omitempty"`
+}
+
+// KopiaServerSpec defines the configuration for running Kopia in server mode.
+type KopiaServerSpec struct {
+	// Enable Kopia Server mode.
+	// When enabled, the operator deploys a Kopia Server for this repository
+	// and backups connect through the server instead of directly to storage.
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+
+	// Container image for the Kopia Server.
+	// +kubebuilder:default:="ghcr.io/fastlorenzo/kopia:latest"
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Number of server replicas.
+	// +kubebuilder:default:=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Replicas int32 `json:"replicas,omitempty"`
+
+	// Resource requirements for the server.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// TLS configuration for the server.
+	// +optional
+	TLS KopiaServerTLSSpec `json:"tls,omitempty"`
+
+	// Exposure configuration (how to expose the server).
+	// +optional
+	Exposure KopiaServerExposureSpec `json:"exposure,omitempty"`
+
+	// Name of a Secret containing the server admin password (key: password).
+	// If not provided, the repository password secret is used.
+	// +optional
+	AdminPasswordSecretName string `json:"adminPasswordSecretName,omitempty"`
+
+	// PersistentVolumeClaim for server internal state.
+	// If not provided, server uses emptyDir (state lost on restart).
+	// +optional
+	PersistentVolumeClaim string `json:"persistentVolumeClaim,omitempty"`
+
+	// Additional command-line arguments for kopia server start.
+	// +optional
+	ExtraArgs []string `json:"extraArgs,omitempty"`
+}
 
 // KopiaRepositoryStorageFileSystemSpec configures a filesystem-backed repository.
 type KopiaRepositoryStorageFileSystemSpec struct {
@@ -70,9 +162,39 @@ type KopiaRepositoryStorageFileSystemSpec struct {
 
 // KopiaRepositoryStorageSFTPSpec configures an SFTP-backed repository.
 type KopiaRepositoryStorageSFTPSpec struct {
-	// Name of the ConfigMap containing the SFTP configuration.
+	// Path to the repository on the SFTP server.
+	Path string `json:"path"`
+
+	// SFTP server hostname.
+	Host string `json:"host"`
+
+	// SFTP server port.
+	// +kubebuilder:default:=22
 	// +optional
-	ConfigMapName string `json:"configMapName,omitempty"`
+	Port int `json:"port,omitempty"`
+
+	// Known hosts data for SSH host key verification.
+	// +optional
+	KnownHostsData string `json:"knownHostsData,omitempty"`
+
+	// Use external SSH command instead of built-in SSH.
+	// +kubebuilder:default:=false
+	// +optional
+	ExternalSSH bool `json:"externalSSH,omitempty"`
+
+	// SSH command to use when ExternalSSH is true.
+	// +kubebuilder:default:="ssh"
+	// +optional
+	SSHCommand string `json:"sshCommand,omitempty"`
+
+	// Directory shards configuration.
+	// +optional
+	DirShards []int `json:"dirShards,omitempty"`
+
+	// Name of Secret containing SFTP credentials.
+	// Expected keys: username, password (optional), keyData (optional - SSH private key).
+	// At least one of password or keyData must be provided.
+	CredentialsSecret string `json:"credentialsSecret"`
 }
 
 // KopiaRepositoryCachingSpec defines caching options for the repository.
@@ -167,6 +289,10 @@ type KopiaRepositorySpec struct {
 	// SFTP storage options (required when storageType is "sftp").
 	// +optional
 	SFTPOptions KopiaRepositoryStorageSFTPSpec `json:"sftpOptions,omitempty"`
+
+	// Server configuration for running Kopia in server mode.
+	// +optional
+	Server KopiaServerSpec `json:"server,omitempty"`
 }
 
 // KopiaRepositoryStatus defines the observed state of KopiaRepository.
@@ -176,12 +302,34 @@ type KopiaRepositoryStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Whether the Kopia Server is deployed and ready (server mode only).
+	// +optional
+	ServerReady bool `json:"serverReady,omitempty"`
+
+	// URL to connect to the Kopia Server.
+	// +optional
+	ServerURL string `json:"serverURL,omitempty"`
+
+	// Deployment name of the Kopia Server.
+	// +optional
+	ServerDeployment string `json:"serverDeployment,omitempty"`
+
+	// Service name for the Kopia Server.
+	// +optional
+	ServerService string `json:"serverService,omitempty"`
+
+	// SHA256 fingerprint of the server's TLS certificate (uppercase hex without colons).
+	// Used by clients to verify the server's certificate.
+	// +optional
+	TLSCertFingerprint string `json:"tlsCertFingerprint,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Storage",type=string,JSONPath=`.spec.storageType`
 // +kubebuilder:printcolumn:name="Hostname",type=string,JSONPath=`.spec.hostname`
+// +kubebuilder:printcolumn:name="Server",type=boolean,JSONPath=`.spec.server.enabled`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

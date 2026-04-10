@@ -9,8 +9,33 @@ spec:
   hostname: cluster
   username: kopia
   storageType: filesystem
+
+  # Secret containing the repository password (key: password)
   passwordSecretName: kopia-repository-password
+
+  # Default backup schedule for backups using this repository
+  defaultSchedule: "0 2 * * *"
+
+  # Filesystem storage configuration
   fileSystemOptions:
     path: /backup/kopia
     nfsServer: "10.0.0.1"
     nfsPath: /export/backup
+
+  # Optional: Enable Kopia Server mode for centralized management
+  # server:
+  #   enabled: true
+  #   image: "kopia/kopia:latest"
+  #   replicas: 1
+  #   adminPasswordSecretName: kopia-server-admin-password
+  #   exposure:
+  #     type: Service
+  #     serviceType: ClusterIP
+  #     servicePort: 51515
+  #   resources:
+  #     requests:
+  #       memory: "256Mi"
+  #       cpu: "100m"
+  #     limits:
+  #       memory: "1Gi"
+  #       cpu: "1000m"

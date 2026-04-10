@@ -5,10 +5,27 @@ metadata:
     app.kubernetes.io/name: kopia-operator
     app.kubernetes.io/managed-by: kustomize
   name: kopiasftprepository-sample
+  namespace: default
 spec:
   hostname: cluster
   username: kopia
   storageType: sftp
-  passwordSecretName: kopia-sftp-password
+
+  # Secret containing the repository password (key: password)
+  passwordSecretName: kopia-repository-password
+
+  # Default backup schedule
+  defaultSchedule: "0 2 * * *"
+
+  # SFTP storage configuration
   sftpOptions:
-    configMapName: kopia-sftp-config
+    host: "sftp.example.com"
+    port: 22
+    path: "/backups/kopia-repo"
+
+    # Secret containing SFTP credentials
+    # Required keys: username, and either password or keyData (SSH private key)
+    credentialsSecret: kopia-sftp-credentials
+
+    # Optional: SSH known_hosts data for host key verification
+    # knownHostsData: "sftp.example.com ssh-rsa AAAAB3NzaC1yc2EAAAABI..."

@@ -21,6 +21,9 @@ spec:
     - jsonPath: .spec.hostname
       name: Hostname
       type: string
+    - jsonPath: .spec.server.enabled
+      name: Server
+      type: boolean
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -163,12 +166,185 @@ spec:
               readonly:
                 description: Make the repository read-only.
                 type: boolean
+              server:
+                description: Server configuration for running Kopia in server mode.
+                properties:
+                  adminPasswordSecretName:
+                    description: |-
+                      Name of a Secret containing the server admin password (key: password).
+                      If not provided, the repository password secret is used.
+                    type: string
+                  enabled:
+                    default: false
+                    description: |-
+                      Enable Kopia Server mode.
+                      When enabled, the operator deploys a Kopia Server for this repository
+                      and backups connect through the server instead of directly to storage.
+                    type: boolean
+                  exposure:
+                    description: Exposure configuration (how to expose the server).
+                    properties:
+                      servicePort:
+                        default: 51515
+                        description: Port for the Kopia Server service.
+                        format: int32
+                        type: integer
+                      serviceType:
+                        default: ClusterIP
+                        description: Kubernetes Service type.
+                        type: string
+                      type:
+                        default: Service
+                        description: Type of exposure.
+                        enum:
+                        - Service
+                        - ""
+                        type: string
+                    type: object
+                  extraArgs:
+                    description: Additional command-line arguments for kopia server
+                      start.
+                    items:
+                      type: string
+                    type: array
+                  image:
+                    default: ghcr.io/fastlorenzo/kopia:latest
+                    description: Container image for the Kopia Server.
+                    type: string
+                  persistentVolumeClaim:
+                    description: |-
+                      PersistentVolumeClaim for server internal state.
+                      If not provided, server uses emptyDir (state lost on restart).
+                    type: string
+                  replicas:
+                    default: 1
+                    description: Number of server replicas.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  resources:
+                    description: Resource requirements for the server.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This is an alpha field and requires enabling the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  tls:
+                    description: TLS configuration for the server.
+                    properties:
+                      certificateCommonName:
+                        description: |-
+                          CertificateCommonName is the CN for the auto-generated certificate.
+                          Defaults to the service name.
+                        type: string
+                      certificateDNSNames:
+                        description: |-
+                          CertificateDNSNames are additional DNS names for the auto-generated certificate.
+                          The service name is always included automatically.
+                        items:
+                          type: string
+                        type: array
+                      secretName:
+                        description: |-
+                          Name of the secret containing TLS certificate and key.
+                          Secret should contain 'tls.crt' and 'tls.key' keys.
+                          If not provided, a self-signed certificate will be auto-generated.
+                        type: string
+                    type: object
+                required:
+                - enabled
+                type: object
               sftpOptions:
                 description: SFTP storage options (required when storageType is "sftp").
                 properties:
-                  configMapName:
-                    description: Name of the ConfigMap containing the SFTP configuration.
+                  credentialsSecret:
+                    description: |-
+                      Name of Secret containing SFTP credentials.
+                      Expected keys: username, password (optional), keyData (optional - SSH private key).
+                      At least one of password or keyData must be provided.
                     type: string
+                  dirShards:
+                    description: Directory shards configuration.
+                    items:
+                      type: integer
+                    type: array
+                  externalSSH:
+                    default: false
+                    description: Use external SSH command instead of built-in SSH.
+                    type: boolean
+                  host:
+                    description: SFTP server hostname.
+                    type: string
+                  knownHostsData:
+                    description: Known hosts data for SSH host key verification.
+                    type: string
+                  path:
+                    description: Path to the repository on the SFTP server.
+                    type: string
+                  port:
+                    default: 22
+                    description: SFTP server port.
+                    type: integer
+                  sshCommand:
+                    default: ssh
+                    description: SSH command to use when ExternalSSH is true.
+                    type: string
+                required:
+                - credentialsSecret
+                - host
+                - path
                 type: object
               storageType:
                 description: Backend storage type.
@@ -250,6 +426,24 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              serverDeployment:
+                description: Deployment name of the Kopia Server.
+                type: string
+              serverReady:
+                description: Whether the Kopia Server is deployed and ready (server
+                  mode only).
+                type: boolean
+              serverService:
+                description: Service name for the Kopia Server.
+                type: string
+              serverURL:
+                description: URL to connect to the Kopia Server.
+                type: string
+              tlsCertFingerprint:
+                description: |-
+                  SHA256 fingerprint of the server's TLS certificate (uppercase hex without colons).
+                  Used by clients to verify the server's certificate.
+                type: string
             type: object
         type: object
     served: true
