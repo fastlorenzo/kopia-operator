@@ -242,7 +242,15 @@ func (r *KopiaBackupReconciler) reconcileServerCredentials(
 		return ctrl.Result{}, true, fmt.Errorf("failed to ensure user: %w", err)
 	}
 
-	backup.Spec.UserCredentialsSecret = secretName
+	// Persist spec change (UserCredentialsSecret) to the API server.
+	if backup.Spec.UserCredentialsSecret != secretName {
+		backup.Spec.UserCredentialsSecret = secretName
+		if err := r.Update(ctx, backup); err != nil {
+			return ctrl.Result{}, true, fmt.Errorf("failed to persist UserCredentialsSecret: %w", err)
+		}
+	}
+
+	// Status fields are persisted by the final Status().Update() in reconcileBackupResources.
 	backup.Status.ServerURL = r.ServerManager.GetServerURL(repo)
 	backup.Status.Username = fmt.Sprintf("%s-%s@%s", backup.Namespace, backup.Spec.PVCName, repo.Spec.Hostname)
 	backup.Status.Connected = true
