@@ -110,8 +110,7 @@ func main() {
 	serverManager := server.NewKopiaServerManager(mgr.GetClient(), mgr.GetScheme())
 
 	// Create user manager for Kopia Server mode (requires REST config for kubectl exec)
-	restConfig := ctrl.GetConfigOrDie()
-	userManager, err := user.NewKopiaUserManager(mgr.GetClient(), mgr.GetScheme(), restConfig)
+	userManager, err := user.NewKopiaUserManager(mgr.GetClient(), mgr.GetScheme(), mgr.GetConfig())
 	if err != nil {
 		setupLog.Error(err, "unable to create KopiaUserManager")
 		os.Exit(1)

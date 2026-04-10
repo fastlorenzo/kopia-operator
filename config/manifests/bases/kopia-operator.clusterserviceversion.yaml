@@ -1,0 +1,55 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+    capabilities: Basic Install
+  name: kopia-operator.v0.0.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: KopiaBackup is the Schema for the kopiabackups API.
+      displayName: Kopia Backup
+      kind: KopiaBackup
+      name: kopiabackups.backup.cloudinfra.be
+      version: v1alpha1
+    - description: KopiaRepository is the Schema for the kopiarepositories API.
+      displayName: Kopia Repository
+      kind: KopiaRepository
+      name: kopiarepositories.backup.cloudinfra.be
+      version: v1alpha1
+  description: A Kubernetes operator for managing [Kopia](https://kopia.io/) backup
+    operations for Persistent Volume Claims (PVCs).
+  displayName: kopia-operator
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      deployments: null
+    strategy: ""
+  installModes:
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - backup
+  - kopia
+  links:
+  - name: Kopia Operator
+    url: https://kopia-operator.domain
+  maintainers:
+  - email: git@bernardi.be
+    name: fastlorenzo
+  maturity: alpha
+  provider:
+    name: fastlorenzo
+    url: https://github.com/fastlorenzo/kopia-operator
+  version: 0.0.0

@@ -188,24 +188,7 @@ func (m *KopiaUserManager) createUserOnServer(
 		return fmt.Errorf("failed to find server pod: %w", err)
 	}
 
-	cmd := []string{
-		"/bin/sh", "-c",
-		fmt.Sprintf(`set -e
-USERNAME='%s'
-PASSWORD='%s'
-echo "Checking if user $USERNAME exists..."
-USER_LIST=$(kopia server user list 2>&1) || true
-if echo "$USER_LIST" | grep -qF "$USERNAME"; then
-  echo "User $USERNAME already exists, updating password..."
-  kopia server user set "$USERNAME" --user-password="$PASSWORD" 2>&1
-else
-  echo "Creating user: $USERNAME"
-  kopia server user add "$USERNAME" --user-password="$PASSWORD" 2>&1
-fi
-echo "Refreshing server..."
-kopia server refresh --server-control-username=admin --server-control-password="${KOPIA_SERVER_PASSWORD}" --address=https://127.0.0.1:51515 --server-cert-fingerprint="%s" 2>&1 || echo "Server refresh failed"
-`, username, password, repo.Status.TLSCertFingerprint),
-	}
+	cmd := buildCreateUserCommand(username, password, repo.Status.TLSCertFingerprint)
 
 	stdout, stderr, err := m.execInPod(ctx, repo.Namespace, podName, "kopia-server", cmd)
 	if err != nil {
@@ -236,10 +219,7 @@ func (m *KopiaUserManager) deleteUserFromServer(
 		return fmt.Errorf("failed to find server pod: %w", err)
 	}
 
-	cmd := []string{
-		"/bin/sh", "-c",
-		fmt.Sprintf(`kopia server user delete '%s' 2>&1 || echo "User may not exist"`, username),
-	}
+	cmd := buildDeleteUserCommand(username)
 
 	stdout, stderr, err := m.execInPod(ctx, repo.Namespace, podName, "kopia-server", cmd)
 	if err != nil {
@@ -312,4 +292,39 @@ func (m *KopiaUserManager) execInPod(ctx context.Context, namespace, podName, co
 	})
 
 	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), err
+}
+
+// buildCreateUserCommand constructs the exec command for creating or updating a
+// Kopia server user. Credentials are passed as positional arguments to /bin/sh
+// rather than interpolated into the shell script, preventing shell injection.
+func buildCreateUserCommand(username, password, certFingerprint string) []string {
+	return []string{
+		"/bin/sh", "-c",
+		`set -e
+USERNAME="$1"
+PASSWORD="$2"
+CERT_FP="$3"
+echo "Checking if user $USERNAME exists..."
+USER_LIST=$(kopia server user list 2>&1) || true
+if echo "$USER_LIST" | grep -qF "$USERNAME"; then
+  echo "User $USERNAME already exists, updating password..."
+  kopia server user set "$USERNAME" --user-password="$PASSWORD" 2>&1
+else
+  echo "Creating user: $USERNAME"
+  kopia server user add "$USERNAME" --user-password="$PASSWORD" 2>&1
+fi
+echo "Refreshing server..."
+kopia server refresh --server-control-username=admin --server-control-password="${KOPIA_SERVER_PASSWORD}" --address=https://127.0.0.1:51515 --server-cert-fingerprint="$CERT_FP" 2>&1 || echo "Server refresh failed"`,
+		"_", username, password, certFingerprint,
+	}
+}
+
+// buildDeleteUserCommand constructs the exec command for deleting a Kopia server
+// user. The username is passed as a positional argument to prevent shell injection.
+func buildDeleteUserCommand(username string) []string {
+	return []string{
+		"/bin/sh", "-c",
+		`kopia server user delete "$1" 2>&1 || echo "User may not exist"`,
+		"_", username,
+	}
 }

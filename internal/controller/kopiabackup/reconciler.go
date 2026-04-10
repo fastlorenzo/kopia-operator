@@ -137,7 +137,9 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		r.setCondition(&kBackup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			backupv1alpha1.ReasonPVCNotFound, fmt.Sprintf("PVC %q not found: %v", kBackup.Spec.PVCName, err))
-		_ = r.Status().Update(ctx, &kBackup)
+		if statusErr := r.Status().Update(ctx, &kBackup); statusErr != nil {
+			log.Error(statusErr, "Failed to update status")
+		}
 		r.Recorder.Event(&kBackup, corev1.EventTypeWarning, "PVCNotFound",
 			fmt.Sprintf("PVC %q not found", kBackup.Spec.PVCName))
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
@@ -159,7 +161,9 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		r.setCondition(&kBackup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			backupv1alpha1.ReasonRepositoryNotFound, fmt.Sprintf("KopiaRepository %q not found", kBackup.Spec.Repository))
-		_ = r.Status().Update(ctx, &kBackup)
+		if statusErr := r.Status().Update(ctx, &kBackup); statusErr != nil {
+			log.Error(statusErr, "Failed to update status")
+		}
 		r.Recorder.Event(&kBackup, corev1.EventTypeWarning, "RepositoryNotFound",
 			fmt.Sprintf("KopiaRepository %q not found in namespace %q", kBackup.Spec.Repository, kBackup.Namespace))
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
@@ -182,7 +186,9 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if r.UserManager == nil {
 			r.setCondition(&kBackup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 				backupv1alpha1.ReasonCronJobFailed, "Server mode requires UserManager to be configured")
-			_ = r.Status().Update(ctx, &kBackup)
+			if statusErr := r.Status().Update(ctx, &kBackup); statusErr != nil {
+				log.Error(statusErr, "Failed to update status")
+			}
 			return ctrl.Result{}, fmt.Errorf("UserManager not configured for server mode")
 		}
 
@@ -214,7 +220,9 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if nodeName == "" {
 		r.setCondition(&kBackup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			backupv1alpha1.ReasonNoPodFound, "No running pod found with the PVC mounted")
-		_ = r.Status().Update(ctx, &kBackup)
+		if statusErr := r.Status().Update(ctx, &kBackup); statusErr != nil {
+			log.Error(statusErr, "Failed to update status")
+		}
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
 	}
 
@@ -227,7 +235,9 @@ func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.reconcileCronJob(ctx, &kBackup, cronJobName, nodeName, appName, repository); err != nil {
 		r.setCondition(&kBackup, backupv1alpha1.ConditionTypeCronJobCreated, metav1.ConditionFalse,
 			backupv1alpha1.ReasonCronJobFailed, err.Error())
-		_ = r.Status().Update(ctx, &kBackup)
+		if statusErr := r.Status().Update(ctx, &kBackup); statusErr != nil {
+			log.Error(statusErr, "Failed to update status")
+		}
 		r.Recorder.Event(&kBackup, corev1.EventTypeWarning, "CronJobFailed", err.Error())
 		return ctrl.Result{}, err
 	}
