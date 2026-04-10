@@ -239,7 +239,7 @@ The operator will automatically:
 1. Detect the label on the PVC
 2. Create a KopiaBackup resource named `my-app-data`
 3. Use the default schedule from the repository
-4. Set the backup status to `FromAnnotation: true`
+4. Set the backup status to `AutoCreated: true`
 
 To disable the backup, simply remove the label:
 

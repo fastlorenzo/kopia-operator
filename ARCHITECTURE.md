@@ -134,7 +134,7 @@ type KopiaBackupSpec struct {
 
 type KopiaBackupStatus struct {
     Active         bool  // Whether backup is currently active
-    FromAnnotation bool  // Created automatically from PVC annotation
+    AutoCreated bool  // Created automatically from PVC annotation
 }
 ```
 
@@ -234,7 +234,7 @@ flowchart TD
     A["1. User creates/updates PVC with label:<br/>backup.cloudinfra.be/repository: &lt;repository-name&gt;"]
     B["2. PVC Watch triggers reconciliation<br/>- KopiaBackupReconciler.findObjectsForPVC() called<br/>- No existing KopiaBackup found"]
     C["3. Reconciler processes PVC request<br/>- handlePVCRequest() invoked<br/>- Validates repository label exists<br/>- Validates KopiaRepository exists"]
-    D["4. Auto-create KopiaBackup<br/>- Name: same as PVC name<br/>- Namespace: same as PVC namespace<br/>- Schedule: from repository's DefaultSchedule<br/>- Set PVC as owner (for cascade deletion)<br/>- Mark Status.FromAnnotation = true"]
+    D["4. Auto-create KopiaBackup<br/>- Name: same as PVC name<br/>- Namespace: same as PVC namespace<br/>- Schedule: from repository's DefaultSchedule<br/>- Set PVC as owner (for cascade deletion)<br/>- Mark Status.AutoCreated = true"]
     E["5. Continue with standard flow<br/>(steps 3-7 from Scenario 1)"]
 
     A --> B --> C --> D --> E
@@ -274,7 +274,7 @@ func handlePVCRequest() {
     // 3. Validate KopiaRepository exists
     // 4. Auto-create KopiaBackup
     // 5. Set owner reference to PVC
-    // 6. Mark as FromAnnotation = true
+    // 6. Mark as AutoCreated = true
 }
 ```
 
@@ -282,7 +282,7 @@ func handlePVCRequest() {
 
 ```go
 func shouldDeleteKopiaBackup() {
-    // If KopiaBackup was auto-created (FromAnnotation = true)
+    // If KopiaBackup was auto-created (AutoCreated = true)
     // Check if PVC still has the repository label
     // If label removed, delete the KopiaBackup
 }
@@ -526,7 +526,7 @@ Adding the label `backup.cloudinfra.be/repository: <repo-name>` to a PVC:
 
 - Automatically creates a KopiaBackup
 - Uses the repository's DefaultSchedule
-- Sets `Status.FromAnnotation = true`
+- Sets `Status.AutoCreated = true`
 - Removes the label → Automatically deletes KopiaBackup
 
 ### 7. **Resource Indexing**

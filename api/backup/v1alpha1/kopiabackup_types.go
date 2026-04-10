@@ -100,9 +100,9 @@ type KopiaBackupStatus struct {
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// Whether this KopiaBackup was auto-created from a PVC annotation.
+	// Whether this KopiaBackup was auto-created from a PVC label.
 	// +optional
-	FromAnnotation bool `json:"fromAnnotation,omitempty"`
+	AutoCreated bool `json:"autoCreated,omitempty"`
 
 	// Name of the CronJob managed by this backup.
 	// +optional

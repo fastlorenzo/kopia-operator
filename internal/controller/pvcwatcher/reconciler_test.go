@@ -146,7 +146,7 @@ var _ = Describe("PVC Watcher Controller", func() {
 			Expect(backup.Spec.PVCName).To(Equal(pvcName))
 			Expect(backup.Spec.Repository).To(Equal(repoName))
 			Expect(backup.Spec.Schedule).To(Equal("0 3 * * *"))
-			Expect(backup.Status.FromAnnotation).To(BeTrue())
+			Expect(backup.Status.AutoCreated).To(BeTrue())
 		})
 
 		It("should use the PVC schedule annotation when present", func() {

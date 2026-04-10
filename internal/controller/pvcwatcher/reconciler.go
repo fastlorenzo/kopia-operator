@@ -76,7 +76,7 @@ func (r *PVCWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// Label removed → delete auto-created backup.
 	if repoName == "" {
-		if backupExists && existingBackup.Status.FromAnnotation {
+		if backupExists && existingBackup.Status.AutoCreated {
 			log.Info("PVC label removed, deleting auto-created KopiaBackup", "backup", existingBackup.Name)
 			if err := r.Delete(ctx, &existingBackup); err != nil && !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, fmt.Errorf("failed to delete KopiaBackup: %w", err)
@@ -89,7 +89,7 @@ func (r *PVCWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// Label present + backup exists → sync schedule from PVC annotation.
 	if backupExists {
-		if existingBackup.Status.FromAnnotation {
+		if existingBackup.Status.AutoCreated {
 			return r.syncSchedule(ctx, &pvc, &existingBackup, repoName)
 		}
 		return ctrl.Result{}, nil
@@ -162,7 +162,7 @@ func (r *PVCWatcherReconciler) createBackupForPVC(
 		return ctrl.Result{}, fmt.Errorf("failed to create KopiaBackup: %w", err)
 	}
 
-	newBackup.Status.FromAnnotation = true
+	newBackup.Status.AutoCreated = true
 	if err := r.Status().Update(ctx, newBackup); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update KopiaBackup status: %w", err)
 	}

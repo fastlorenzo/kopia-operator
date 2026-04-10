@@ -87,6 +87,10 @@ spec:
           status:
             description: KopiaBackupStatus defines the observed state of KopiaBackup.
             properties:
+              autoCreated:
+                description: Whether this KopiaBackup was auto-created from a PVC
+                  label.
+                type: boolean
               backupHistory:
                 description: History of the last 10 backup executions.
                 items:
@@ -188,10 +192,6 @@ spec:
               cronJobName:
                 description: Name of the CronJob managed by this backup.
                 type: string
-              fromAnnotation:
-                description: Whether this KopiaBackup was auto-created from a PVC
-                  annotation.
-                type: boolean
               lastBackupStatus:
                 description: Status of the last backup.
                 enum:
