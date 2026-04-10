@@ -20,86 +20,139 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// StorageType defines the backend storage type for a Kopia repository.
+// +kubebuilder:validation:Enum=filesystem;sftp
+type StorageType string
 
-type KopiaRepositoryStorageConfigSpec struct {
-	Path string `json:"path"`
-}
+const (
+	StorageTypeFilesystem StorageType = "filesystem"
+	StorageTypeSFTP       StorageType = "sftp"
+)
 
+const (
+	// ConditionTypeRepositoryReady indicates the repository configuration is valid.
+	ConditionTypeRepositoryReady = "Ready"
+
+	// ReasonConfigValid indicates the repository configuration passed validation.
+	ReasonConfigValid = "ConfigValid"
+	// ReasonMissingPassword indicates no password secret reference was provided.
+	ReasonMissingPassword = "MissingPassword"
+	// ReasonUnsupportedStorage indicates an unsupported storage type.
+	ReasonUnsupportedStorage = "UnsupportedStorage"
+)
+
+// KopiaRepositoryStorageFileSystemSpec configures a filesystem-backed repository.
 type KopiaRepositoryStorageFileSystemSpec struct {
-	// Path is the path to the repository on the filesystem.
+	// Path to the repository on the filesystem.
 	Path string `json:"path"`
 
-	// FileMode in the repository.
+	// FileMode for files in the repository.
+	// +optional
 	FileMode uint32 `json:"fileMode,omitempty"`
-	// DirectoryMode in the repository.
+	// DirectoryMode for directories in the repository.
+	// +optional
 	DirectoryMode uint32 `json:"dirMode,omitempty"`
 
-	// User ID of the files in the repository.
+	// UID of files in the repository.
+	// +optional
 	FileUID int `json:"uid,omitempty"`
-	// Group ID of the files in the repository.
+	// GID of files in the repository.
+	// +optional
 	FileGID int `json:"gid,omitempty"`
 
-	// Export path on the NFS server for the repository.
+	// NFS export path for the repository.
+	// +optional
 	NFSPath string `json:"nfsPath,omitempty"`
-	// NFS server for the repository.
+	// NFS server address.
+	// +optional
 	NFSServer string `json:"nfsServer,omitempty"`
 }
 
+// KopiaRepositoryStorageSFTPSpec configures an SFTP-backed repository.
 type KopiaRepositoryStorageSFTPSpec struct {
-	// configMapName is a reference to a ConfigMap containing the SFTP configuration.
+	// Name of the ConfigMap containing the SFTP configuration.
+	// +optional
 	ConfigMapName string `json:"configMapName,omitempty"`
 }
 
-// KopiaRepositoryCachingSpec defines the desired state of KopiaRepositoryCaching
+// KopiaRepositoryCachingSpec defines caching options for the repository.
 type KopiaRepositoryCachingSpec struct {
+	// Directory used for local caching.
 	// +kubebuilder:default:="cache"
 	CacheDirectory string `json:"cacheDirectory,omitempty"`
+
+	// Maximum size of the content cache in bytes.
 	// +kubebuilder:default:=5242880000
-	ContentCacheSizeBytes      int64 `json:"maxCacheSize,omitempty"`
+	ContentCacheSizeBytes int64 `json:"maxCacheSize,omitempty"`
+
+	// Hard limit for content cache size in bytes.
+	// +optional
 	ContentCacheSizeLimitBytes int64 `json:"contentCacheSizeLimitBytes,omitempty"`
+
+	// Maximum size of the metadata cache in bytes.
 	// +kubebuilder:default:=5242880000
-	MetadataCacheSizeBytes      int64 `json:"maxMetadataCacheSize,omitempty"`
+	MetadataCacheSizeBytes int64 `json:"maxMetadataCacheSize,omitempty"`
+
+	// Hard limit for metadata cache size in bytes.
+	// +optional
 	MetadataCacheSizeLimitBytes int64 `json:"metadataCacheSizeLimitBytes,omitempty"`
+
+	// Maximum duration (in seconds) to cache directory listings.
 	// +kubebuilder:default:=30
 	MaxListCacheDuration int64 `json:"maxListCacheDuration,omitempty"`
-	MinMetadataSweepAge  int64 `json:"minMetadataSweepAge,omitempty"`
-	MinContentSweepAge   int64 `json:"minContentSweepAge,omitempty"`
-	MinIndexSweepAge     int64 `json:"minIndexSweepAge,omitempty"`
-	// HMACSecret                  []byte `json:"-"`
+
+	// Minimum age (in seconds) of metadata before it can be swept.
+	// +optional
+	MinMetadataSweepAge int64 `json:"minMetadataSweepAge,omitempty"`
+
+	// Minimum age (in seconds) of content before it can be swept.
+	// +optional
+	MinContentSweepAge int64 `json:"minContentSweepAge,omitempty"`
+
+	// Minimum age (in seconds) of index entries before they can be swept.
+	// +optional
+	MinIndexSweepAge int64 `json:"minIndexSweepAge,omitempty"`
 }
 
-// KopiaRepositorySpec defines the desired state of KopiaRepository
+// KopiaRepositorySpec defines the desired state of KopiaRepository.
 type KopiaRepositorySpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// Kopia repository hostname
+	// Hostname used by Kopia to identify this repository.
+	// +kubebuilder:validation:MinLength=1
 	Hostname string `json:"hostname"`
-	// Kopia repository username
-	Username string `json:"username"`
-	// Storage type (currently only filesystem and sftp are supported)
-	StorageType string `json:"storageType"`
 
-	// Make the repository read-only
+	// Username used by Kopia to identify the repository owner.
+	// +kubebuilder:validation:MinLength=1
+	Username string `json:"username"`
+
+	// Backend storage type.
+	StorageType StorageType `json:"storageType"`
+
+	// Make the repository read-only.
+	// +optional
 	ReadOnly bool `json:"readonly,omitempty"`
-	// Allow loading from cache even if it's stale
+
+	// Allow loading from cache even when stale.
+	// +optional
 	PermissiveCacheLoading bool `json:"permissiveCacheLoading,omitempty"`
-	// Human-readable description of the repository to use in the UI.
+
+	// Human-readable description shown in the Kopia UI.
 	// +kubebuilder:default:=Cluster
 	Description string `json:"description,omitempty"`
-	// Enables Kopia actions in the repository.
-	EnableActions bool `json:"enableActions"`
 
-	// Cronjob for default schedule if not set in KopiaBackup
+	// Enable Kopia actions in the repository.
+	// +kubebuilder:default:=false
+	EnableActions bool `json:"enableActions,omitempty"`
+
+	// Default cron schedule for KopiaBackup resources that omit their own schedule.
+	// +optional
 	DefaultSchedule string `json:"defaultSchedule,omitempty"`
 
-	// Password for Kopia repository, ignored if RepositoryPasswordExistingSecret is set
-	RepositoryPassword string `json:"repositoryPassword,omitempty"`
-	// Secret name containing the password for the Kopia repository (must be in the same namespace); the password should be in KOPIA_PASSWORD key
-	RepositoryPasswordExistingSecret string `json:"repositoryPasswordExistingSecret,omitempty"`
+	// Name of an existing Secret containing the repository password in the KOPIA_PASSWORD key.
+	// The Secret must be in the same namespace as the KopiaRepository.
+	// +kubebuilder:validation:MinLength=1
+	PasswordSecretName string `json:"passwordSecretName"`
 
+	// Duration (in nanoseconds) to cache format blobs.
 	// +kubebuilder:default:=900000000000
 	FormatBlobCacheDuration int64 `json:"formatBlobCacheDuration,omitempty"`
 
@@ -107,21 +160,32 @@ type KopiaRepositorySpec struct {
 	// +kubebuilder:default:={}
 	Caching KopiaRepositoryCachingSpec `json:"caching,omitempty"`
 
+	// Filesystem storage options (required when storageType is "filesystem").
+	// +optional
 	FileSystemOptions KopiaRepositoryStorageFileSystemSpec `json:"fileSystemOptions,omitempty"`
 
+	// SFTP storage options (required when storageType is "sftp").
+	// +optional
 	SFTPOptions KopiaRepositoryStorageSFTPSpec `json:"sftpOptions,omitempty"`
 }
 
-// KopiaRepositoryStatus defines the observed state of KopiaRepository
+// KopiaRepositoryStatus defines the observed state of KopiaRepository.
 type KopiaRepositoryStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Conditions represent the latest available observations of the repository's state.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Storage",type=string,JSONPath=`.spec.storageType`
+// +kubebuilder:printcolumn:name="Hostname",type=string,JSONPath=`.spec.hostname`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KopiaRepository is the Schema for the kopiarepositories API
+// KopiaRepository is the Schema for the kopiarepositories API.
 type KopiaRepository struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -130,9 +194,9 @@ type KopiaRepository struct {
 	Status KopiaRepositoryStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
-// KopiaRepositoryList contains a list of KopiaRepository
+// KopiaRepositoryList contains a list of KopiaRepository.
 type KopiaRepositoryList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

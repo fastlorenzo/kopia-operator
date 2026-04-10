@@ -20,38 +20,76 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+const (
+	// ConditionTypeReady indicates the backup is fully reconciled and the CronJob is active.
+	ConditionTypeReady = "Ready"
+	// ConditionTypeCronJobCreated indicates the CronJob has been created for this backup.
+	ConditionTypeCronJobCreated = "CronJobCreated"
 
-// KopiaBackupSpec defines the desired state of KopiaBackup
+	// ReasonReconciled indicates the resource was reconciled successfully.
+	ReasonReconciled = "Reconciled"
+	// ReasonPVCNotFound indicates the referenced PVC was not found.
+	ReasonPVCNotFound = "PVCNotFound"
+	// ReasonRepositoryNotFound indicates the referenced KopiaRepository was not found.
+	ReasonRepositoryNotFound = "RepositoryNotFound"
+	// ReasonNoPodFound indicates no running pod was found using the PVC.
+	ReasonNoPodFound = "NoPodFound"
+	// ReasonCronJobFailed indicates the CronJob could not be created or updated.
+	ReasonCronJobFailed = "CronJobFailed"
+	// ReasonSuspended indicates the backup is suspended.
+	ReasonSuspended = "Suspended"
+)
+
+// KopiaBackupSpec defines the desired state of KopiaBackup.
 type KopiaBackupSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// Name of the PVC to backup
+	// Name of the PVC to back up.
+	// +kubebuilder:validation:MinLength=1
 	PVCName string `json:"pvcName"`
-	// Schedule for the backup
+
+	// Cron schedule for the backup (e.g. "0 3 * * *").
+	// +kubebuilder:validation:MinLength=1
 	Schedule string `json:"schedule"`
-	// KopiaRepository to use for the backup
+
+	// Name of the KopiaRepository to use for this backup.
+	// +kubebuilder:validation:MinLength=1
 	Repository string `json:"repository"`
 
-	// Optional: suspend (default=false) will suspend the cronjob
+	// Suspend the CronJob when set to true.
+	// +kubebuilder:default:=false
 	Suspend bool `json:"suspend,omitempty"`
 }
 
-// KopiaBackupStatus defines the observed state of KopiaBackup
+// KopiaBackupStatus defines the observed state of KopiaBackup.
 type KopiaBackupStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Conditions represent the latest available observations of the backup's state.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	Active         bool `json:"active"`
-	FromAnnotation bool `json:"fromAnnotation"`
+	// Whether this KopiaBackup was auto-created from a PVC annotation.
+	// +optional
+	FromAnnotation bool `json:"fromAnnotation,omitempty"`
+
+	// Name of the CronJob managed by this backup.
+	// +optional
+	CronJobName string `json:"cronJobName,omitempty"`
+
+	// Node where the pod using the PVC is running.
+	// +optional
+	NodeName string `json:"nodeName,omitempty"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="PVC",type=string,JSONPath=`.spec.pvcName`
+// +kubebuilder:printcolumn:name="Schedule",type=string,JSONPath=`.spec.schedule`
+// +kubebuilder:printcolumn:name="Repository",type=string,JSONPath=`.spec.repository`
+// +kubebuilder:printcolumn:name="Suspended",type=boolean,JSONPath=`.spec.suspend`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KopiaBackup is the Schema for the kopiabackups API
+// KopiaBackup is the Schema for the kopiabackups API.
 type KopiaBackup struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -60,9 +98,9 @@ type KopiaBackup struct {
 	Status KopiaBackupStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
-// KopiaBackupList contains a list of KopiaBackup
+// KopiaBackupList contains a list of KopiaBackup.
 type KopiaBackupList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

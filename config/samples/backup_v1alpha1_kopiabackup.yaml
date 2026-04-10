@@ -6,4 +6,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: kopiabackup-sample
 spec:
-  # TODO(user): Add fields here
+  pvcName: my-app-data
+  schedule: "0 3 * * *"
+  repository: my-repository
+  suspend: false

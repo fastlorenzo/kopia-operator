@@ -14,10 +14,23 @@ spec:
     singular: kopiarepository
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.storageType
+      name: Storage
+      type: string
+    - jsonPath: .spec.hostname
+      name: Hostname
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KopiaRepository is the Schema for the kopiarepositories API
+        description: KopiaRepository is the Schema for the kopiarepositories API.
         properties:
           apiVersion:
             description: |-
@@ -37,7 +50,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: KopiaRepositorySpec defines the desired state of KopiaRepository
+            description: KopiaRepositorySpec defines the desired state of KopiaRepository.
             properties:
               caching:
                 default: {}
@@ -45,118 +58,198 @@ spec:
                 properties:
                   cacheDirectory:
                     default: cache
+                    description: Directory used for local caching.
                     type: string
                   contentCacheSizeLimitBytes:
+                    description: Hard limit for content cache size in bytes.
                     format: int64
                     type: integer
                   maxCacheSize:
                     default: 5242880000
+                    description: Maximum size of the content cache in bytes.
                     format: int64
                     type: integer
                   maxListCacheDuration:
                     default: 30
+                    description: Maximum duration (in seconds) to cache directory
+                      listings.
                     format: int64
                     type: integer
                   maxMetadataCacheSize:
                     default: 5242880000
+                    description: Maximum size of the metadata cache in bytes.
                     format: int64
                     type: integer
                   metadataCacheSizeLimitBytes:
+                    description: Hard limit for metadata cache size in bytes.
                     format: int64
                     type: integer
                   minContentSweepAge:
+                    description: Minimum age (in seconds) of content before it can
+                      be swept.
                     format: int64
                     type: integer
                   minIndexSweepAge:
+                    description: Minimum age (in seconds) of index entries before
+                      they can be swept.
                     format: int64
                     type: integer
                   minMetadataSweepAge:
+                    description: Minimum age (in seconds) of metadata before it can
+                      be swept.
                     format: int64
                     type: integer
                 type: object
               defaultSchedule:
-                description: Cronjob for default schedule if not set in KopiaBackup
+                description: Default cron schedule for KopiaBackup resources that
+                  omit their own schedule.
                 type: string
               description:
                 default: Cluster
-                description: Human-readable description of the repository to use in
-                  the UI.
+                description: Human-readable description shown in the Kopia UI.
                 type: string
               enableActions:
-                description: Enables Kopia actions in the repository.
+                default: false
+                description: Enable Kopia actions in the repository.
                 type: boolean
               fileSystemOptions:
+                description: Filesystem storage options (required when storageType
+                  is "filesystem").
                 properties:
                   dirMode:
-                    description: DirectoryMode in the repository.
+                    description: DirectoryMode for directories in the repository.
                     format: int32
                     type: integer
                   fileMode:
-                    description: FileMode in the repository.
+                    description: FileMode for files in the repository.
                     format: int32
                     type: integer
                   gid:
-                    description: Group ID of the files in the repository.
+                    description: GID of files in the repository.
                     type: integer
                   nfsPath:
-                    description: Export path on the NFS server for the repository.
+                    description: NFS export path for the repository.
                     type: string
                   nfsServer:
-                    description: NFS server for the repository.
+                    description: NFS server address.
                     type: string
                   path:
-                    description: Path is the path to the repository on the filesystem.
+                    description: Path to the repository on the filesystem.
                     type: string
                   uid:
-                    description: User ID of the files in the repository.
+                    description: UID of files in the repository.
                     type: integer
                 required:
                 - path
                 type: object
               formatBlobCacheDuration:
                 default: 900000000000
+                description: Duration (in nanoseconds) to cache format blobs.
                 format: int64
                 type: integer
               hostname:
-                description: Kopia repository hostname
+                description: Hostname used by Kopia to identify this repository.
+                minLength: 1
+                type: string
+              passwordSecretName:
+                description: |-
+                  Name of an existing Secret containing the repository password in the KOPIA_PASSWORD key.
+                  The Secret must be in the same namespace as the KopiaRepository.
+                minLength: 1
                 type: string
               permissiveCacheLoading:
-                description: Allow loading from cache even if it's stale
+                description: Allow loading from cache even when stale.
                 type: boolean
               readonly:
-                description: Make the repository read-only
+                description: Make the repository read-only.
                 type: boolean
-              repositoryPassword:
-                description: Password for Kopia repository, ignored if RepositoryPasswordExistingSecret
-                  is set
-                type: string
-              repositoryPasswordExistingSecret:
-                description: Secret name containing the password for the Kopia repository
-                  (must be in the same namespace); the password should be in KOPIA_PASSWORD
-                  key
-                type: string
               sftpOptions:
+                description: SFTP storage options (required when storageType is "sftp").
                 properties:
                   configMapName:
-                    description: configMapName is a reference to a ConfigMap containing
-                      the SFTP configuration.
+                    description: Name of the ConfigMap containing the SFTP configuration.
                     type: string
                 type: object
               storageType:
-                description: Storage type (currently only filesystem and sftp are
-                  supported)
+                description: Backend storage type.
+                enum:
+                - filesystem
+                - sftp
                 type: string
               username:
-                description: Kopia repository username
+                description: Username used by Kopia to identify the repository owner.
+                minLength: 1
                 type: string
             required:
-            - enableActions
             - hostname
+            - passwordSecretName
             - storageType
             - username
             type: object
           status:
-            description: KopiaRepositoryStatus defines the observed state of KopiaRepository
+            description: KopiaRepositoryStatus defines the observed state of KopiaRepository.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the repository's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
             type: object
         type: object
     served: true
