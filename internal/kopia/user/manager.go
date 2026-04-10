@@ -111,6 +111,10 @@ func (m *KopiaUserManager) EnsureUser(
 		}
 
 		if err := m.createUserOnServer(ctx, repo, username, password); err != nil {
+			// Rollback: delete the secret if user creation on the server fails.
+			if delErr := m.Client.Delete(ctx, secret); delErr != nil {
+				logger.Error(delErr, "Failed to rollback user credentials secret", "secret", secretName)
+			}
 			var serverNotReady *kopia.ServerNotReadyError
 			if errors.As(err, &serverNotReady) {
 				logger.Info("Server not ready, will requeue", "error", err.Error())
@@ -176,15 +180,13 @@ func (m *KopiaUserManager) DeleteUser(
 
 // generateSecurePassword generates a cryptographically secure random password.
 func generateSecurePassword(length int) (string, error) {
-	b := make([]byte, length)
+	// base64 encodes 3 bytes into 4 characters; calculate bytes needed for desired length.
+	numBytes := (length*3 + 3) / 4
+	b := make([]byte, numBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("failed to generate random bytes: %w", err)
 	}
-	password := base64.URLEncoding.EncodeToString(b)
-	if len(password) > length {
-		password = password[:length]
-	}
-	return password, nil
+	return base64.URLEncoding.EncodeToString(b)[:length], nil
 }
 
 // createUserOnServer creates a user on the Kopia server via kubectl exec.
