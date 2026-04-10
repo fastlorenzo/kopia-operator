@@ -61,7 +61,7 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return result, err
 }
 
-func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
 	log := ctrllog.FromContext(ctx)
 
 	var repo backupv1alpha1.KopiaRepository
@@ -70,6 +70,16 @@ func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	log.Info("Reconciling KopiaRepository", "name", repo.Name)
+
+	// Single deferred status update — all code paths set conditions in-memory.
+	defer func() {
+		if statusErr := r.Status().Update(ctx, &repo); statusErr != nil {
+			log.Error(statusErr, "Failed to update status")
+			if retErr == nil {
+				retErr = statusErr
+			}
+		}
+	}()
 
 	// Validate password secret reference
 	if repo.Spec.PasswordSecretName == "" {
@@ -80,9 +90,6 @@ func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Requ
 			Message:            "spec.passwordSecretName must be set",
 			ObservedGeneration: repo.Generation,
 		})
-		if statusErr := r.Status().Update(ctx, &repo); statusErr != nil {
-			log.Error(statusErr, "Failed to update status")
-		}
 		return ctrl.Result{}, nil
 	}
 
@@ -96,7 +103,6 @@ func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Requ
 				Message:            "Server mode requires ServerManager to be configured",
 				ObservedGeneration: repo.Generation,
 			})
-			_ = r.Status().Update(ctx, &repo)
 			return ctrl.Result{}, fmt.Errorf("ServerManager not configured for server mode")
 		}
 
@@ -110,9 +116,6 @@ func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Requ
 				Message:            fmt.Sprintf("Failed to ensure TLS: %v", err),
 				ObservedGeneration: repo.Generation,
 			})
-			if statusErr := r.Status().Update(ctx, &repo); statusErr != nil {
-				log.Error(statusErr, "Failed to update status")
-			}
 			r.Recorder.Event(&repo, corev1.EventTypeWarning, "TLSFailed", err.Error())
 			return ctrl.Result{}, fmt.Errorf("failed to ensure TLS secret: %w", err)
 		}
@@ -127,9 +130,6 @@ func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Requ
 				Message:            fmt.Sprintf("Failed to ensure Deployment: %v", err),
 				ObservedGeneration: repo.Generation,
 			})
-			if statusErr := r.Status().Update(ctx, &repo); statusErr != nil {
-				log.Error(statusErr, "Failed to update status")
-			}
 			r.Recorder.Event(&repo, corev1.EventTypeWarning, "DeploymentFailed", err.Error())
 			return ctrl.Result{}, fmt.Errorf("failed to ensure server deployment: %w", err)
 		}
@@ -143,9 +143,6 @@ func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Requ
 				Message:            fmt.Sprintf("Failed to ensure Service: %v", err),
 				ObservedGeneration: repo.Generation,
 			})
-			if statusErr := r.Status().Update(ctx, &repo); statusErr != nil {
-				log.Error(statusErr, "Failed to update status")
-			}
 			r.Recorder.Event(&repo, corev1.EventTypeWarning, "ServiceFailed", err.Error())
 			return ctrl.Result{}, fmt.Errorf("failed to ensure server service: %w", err)
 		}
@@ -185,7 +182,6 @@ func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Requ
 				Message:            "Kopia Server deployment is not ready yet",
 				ObservedGeneration: repo.Generation,
 			})
-			// Requeue to check readiness again
 			meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
 				Type:               backupv1alpha1.ConditionTypeRepositoryReady,
 				Status:             metav1.ConditionFalse,
@@ -193,9 +189,6 @@ func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Requ
 				Message:            "Waiting for Kopia Server to be ready",
 				ObservedGeneration: repo.Generation,
 			})
-			if statusErr := r.Status().Update(ctx, &repo); statusErr != nil {
-				log.Error(statusErr, "Failed to update status")
-			}
 			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
 	}
@@ -208,9 +201,6 @@ func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Requ
 		Message:            "Repository configuration is valid",
 		ObservedGeneration: repo.Generation,
 	})
-	if err := r.Status().Update(ctx, &repo); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-	}
 
 	return ctrl.Result{}, nil
 }
