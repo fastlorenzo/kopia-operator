@@ -20,13 +20,6 @@ rules:
   - ""
   resources:
   - persistentvolumeclaims
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - pods
   verbs:
   - get
@@ -36,31 +29,6 @@ rules:
   - backup.cloudinfra.be
   resources:
   - kopiabackups
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiabackups/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiabackups/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
   - kopiarepositories
   verbs:
   - create
@@ -73,12 +41,14 @@ rules:
 - apiGroups:
   - backup.cloudinfra.be
   resources:
+  - kopiabackups/finalizers
   - kopiarepositories/finalizers
   verbs:
   - update
 - apiGroups:
   - backup.cloudinfra.be
   resources:
+  - kopiabackups/status
   - kopiarepositories/status
   verbs:
   - get
