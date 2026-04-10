@@ -32,10 +32,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	webhookserver "sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 	"github.com/fastlorenzo/kopia-operator/internal/controller/kopiabackup"
 	"github.com/fastlorenzo/kopia-operator/internal/controller/kopiarepository"
+	"github.com/fastlorenzo/kopia-operator/internal/controller/pvcwatcher"
 	"github.com/fastlorenzo/kopia-operator/internal/kopia/server"
 	"github.com/fastlorenzo/kopia-operator/internal/kopia/user"
 	//+kubebuilder:scaffold:imports
@@ -96,6 +98,10 @@ func main() {
 			SecureServing: secureMetrics,
 			TLSOpts:       tlsOpts,
 		},
+		WebhookServer: webhookserver.NewServer(webhookserver.Options{
+			Port:    9443,
+			TLSOpts: tlsOpts,
+		}),
 		HealthProbeBindAddress:        probeAddr,
 		LeaderElection:                enableLeaderElection,
 		LeaderElectionID:              "71b0af1d.cloudinfra.be",
@@ -136,7 +142,33 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "KopiaRepository")
 		os.Exit(1)
 	}
+	if err = (&pvcwatcher.PVCWatcherReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("pvcwatcher-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PVCWatcher")
+		os.Exit(1)
+	}
 	//+kubebuilder:scaffold:builder
+
+	// Register validating webhooks when enabled.
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err = ctrl.NewWebhookManagedBy(mgr).
+			For(&backupv1alpha1.KopiaBackup{}).
+			WithValidator(&backupv1alpha1.KopiaBackupCustomValidator{}).
+			Complete(); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "KopiaBackup")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr).
+			For(&backupv1alpha1.KopiaRepository{}).
+			WithValidator(&backupv1alpha1.KopiaRepositoryCustomValidator{}).
+			Complete(); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "KopiaRepository")
+			os.Exit(1)
+		}
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

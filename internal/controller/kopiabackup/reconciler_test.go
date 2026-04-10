@@ -176,7 +176,7 @@ var _ = Describe("KopiaBackup Controller", func() {
 			Expect(readyCond.Reason).To(Equal(backupv1alpha1.ReasonNoPodFound))
 		})
 
-		It("should handle missing KopiaBackup by checking for PVC", func() {
+		It("should ignore missing KopiaBackup (not found)", func() {
 			controllerReconciler := &KopiaBackupReconciler{
 				Client:   k8sClient,
 				Scheme:   k8sClient.Scheme(),
@@ -190,52 +190,6 @@ var _ = Describe("KopiaBackup Controller", func() {
 				},
 			})
 			Expect(err).NotTo(HaveOccurred())
-		})
-	})
-
-	Context("getScheduleFromPVC", func() {
-		const defaultSchedule = "0 3/6 * * *"
-
-		It("should return the annotation schedule when present", func() {
-			pvc := &corev1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Annotations: map[string]string{
-						scheduleAnnotationKey: "0 3 * * *",
-					},
-				},
-			}
-			Expect(getScheduleFromPVC(pvc, defaultSchedule)).To(Equal("0 3 * * *"))
-		})
-
-		It("should return the default schedule when annotation is absent", func() {
-			pvc := &corev1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{},
-			}
-			Expect(getScheduleFromPVC(pvc, defaultSchedule)).To(Equal(defaultSchedule))
-		})
-
-		It("should return the default schedule when annotation is empty", func() {
-			pvc := &corev1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Annotations: map[string]string{
-						scheduleAnnotationKey: "",
-					},
-				},
-			}
-			Expect(getScheduleFromPVC(pvc, defaultSchedule)).To(Equal(defaultSchedule))
-		})
-
-		It("should return the default schedule when PVC is nil", func() {
-			Expect(getScheduleFromPVC(nil, defaultSchedule)).To(Equal(defaultSchedule))
-		})
-
-		It("should return the default schedule when annotations map is nil", func() {
-			pvc := &corev1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Annotations: nil,
-				},
-			}
-			Expect(getScheduleFromPVC(pvc, defaultSchedule)).To(Equal(defaultSchedule))
 		})
 	})
 })

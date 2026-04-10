@@ -1,0 +1,46 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-backup-cloudinfra-be-v1alpha1-kopiabackup
+  failurePolicy: Fail
+  name: vkopiabackup-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - backup.cloudinfra.be
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - kopiabackups
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-backup-cloudinfra-be-v1alpha1-kopiarepository
+  failurePolicy: Fail
+  name: vkopiarepository-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - backup.cloudinfra.be
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - kopiarepositories
+  sideEffects: None

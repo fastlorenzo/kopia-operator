@@ -46,13 +46,13 @@ import (
 )
 
 const (
-	scheduleAnnotationKey = "backup.cloudinfra.be/schedule"
-	repositoryLabelKey    = "backup.cloudinfra.be/repository"
-	finalizerName         = "backup.cloudinfra.be/finalizer"
-	requeueDelay          = 30 * time.Second
+	finalizerName = "backup.cloudinfra.be/finalizer"
+	requeueDelay  = 30 * time.Second
 
 	// pvcNameField is the field indexer for PVC name in KopiaBackup spec.
 	pvcNameField = ".spec.pvcName"
+	// repositoryNameField is the field indexer for repository name in KopiaBackup spec.
+	repositoryNameField = ".spec.repository"
 
 	// DefaultKopiaImage is the default Kopia container image used by backup CronJobs.
 	DefaultKopiaImage = "ghcr.io/fastlorenzo/kopia:0.20.1@sha256:4a2660db62960eb0b4ba98982c4566bcc9dd2ee3b15b31af9626146aa4e5d8e3"
@@ -92,168 +92,199 @@ func (r *KopiaBackupReconciler) kopiaImage() string {
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories,verbs=get;list;watch
 
+// Reconcile orchestrates the backup reconciliation through discrete phases.
 func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// --- Fetch the KopiaBackup ---
 	var kBackup backupv1alpha1.KopiaBackup
 	if err := r.Get(ctx, req.NamespacedName, &kBackup); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.handlePVCRequest(ctx, req)
-		}
-		return ctrl.Result{}, fmt.Errorf("failed to get KopiaBackup: %w", err)
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// --- Finalizer handling ---
-	if !kBackup.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(&kBackup, finalizerName) {
-			log.Info("Running finalizer cleanup")
-			if r.UserManager != nil && kBackup.Spec.UserCredentialsSecret != "" {
-				repo, err := r.getKopiaRepository(ctx, kBackup.Spec.Repository, kBackup.Namespace)
-				if err == nil && repo.Spec.Server.Enabled {
-					if delErr := r.UserManager.DeleteUser(ctx, &kBackup, repo); delErr != nil {
-						log.Error(delErr, "Failed to delete server user during finalization")
-					}
-				}
-			}
-			controllerutil.RemoveFinalizer(&kBackup, finalizerName)
-			if err := r.Update(ctx, &kBackup); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
-			}
-		}
+	// Phase 1: Finalizer handling
+	if done, err := r.handleFinalizer(ctx, &kBackup); done {
+		return ctrl.Result{}, err
+	}
+
+	// Phase 2: Validate PVC and repository
+	repo, done := r.validateDependencies(ctx, &kBackup)
+	if done {
 		return ctrl.Result{}, nil
 	}
 
-	if !controllerutil.ContainsFinalizer(&kBackup, finalizerName) {
-		controllerutil.AddFinalizer(&kBackup, finalizerName)
-		if err := r.Update(ctx, &kBackup); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
+	// Phase 3: Server mode credentials
+	if repo.Spec.Server.Enabled {
+		if result, done, err := r.reconcileServerCredentials(ctx, &kBackup, repo); done {
+			return result, err
 		}
 	}
 
-	// --- Validate PVC ---
-	foundPVC, err := r.getRelatedPVC(ctx, &kBackup)
-	if err != nil {
-		r.setCondition(&kBackup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-			backupv1alpha1.ReasonPVCNotFound, fmt.Sprintf("PVC %q not found: %v", kBackup.Spec.PVCName, err))
-		if statusErr := r.Status().Update(ctx, &kBackup); statusErr != nil {
-			log.Error(statusErr, "Failed to update status")
-		}
-		r.Recorder.Event(&kBackup, corev1.EventTypeWarning, "PVCNotFound",
-			fmt.Sprintf("PVC %q not found", kBackup.Spec.PVCName))
-		return ctrl.Result{RequeueAfter: requeueDelay}, nil
-	}
-
-	// Auto-delete KopiaBackup when the PVC label is removed (annotation-created only)
-	if kBackup.Status.FromAnnotation {
-		if foundPVC.Labels == nil || foundPVC.Labels[repositoryLabelKey] == "" {
-			log.Info("PVC label removed, deleting auto-created KopiaBackup")
-			if err := r.Delete(ctx, &kBackup); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to delete KopiaBackup: %w", err)
-			}
-			return ctrl.Result{}, nil
-		}
-	}
-
-	// --- Validate repository ---
-	repository, err := r.getKopiaRepository(ctx, kBackup.Spec.Repository, kBackup.Namespace)
-	if err != nil {
-		r.setCondition(&kBackup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-			backupv1alpha1.ReasonRepositoryNotFound, fmt.Sprintf("KopiaRepository %q not found", kBackup.Spec.Repository))
-		if statusErr := r.Status().Update(ctx, &kBackup); statusErr != nil {
-			log.Error(statusErr, "Failed to update status")
-		}
-		r.Recorder.Event(&kBackup, corev1.EventTypeWarning, "RepositoryNotFound",
-			fmt.Sprintf("KopiaRepository %q not found in namespace %q", kBackup.Spec.Repository, kBackup.Namespace))
-		return ctrl.Result{RequeueAfter: requeueDelay}, nil
-	}
-
-	// Sync schedule from PVC annotation for auto-created backups
-	if kBackup.Status.FromAnnotation {
-		newSchedule := getScheduleFromPVC(foundPVC, repository.Spec.DefaultSchedule)
-		if newSchedule != kBackup.Spec.Schedule {
-			log.Info("Updating schedule from PVC annotation", "old", kBackup.Spec.Schedule, "new", newSchedule)
-			kBackup.Spec.Schedule = newSchedule
-			if err := r.Update(ctx, &kBackup); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update schedule: %w", err)
-			}
-		}
-	}
-
-	// --- Server mode: ensure user credentials ---
-	if repository.Spec.Server.Enabled {
-		if r.UserManager == nil {
-			r.setCondition(&kBackup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-				backupv1alpha1.ReasonCronJobFailed, "Server mode requires UserManager to be configured")
-			if statusErr := r.Status().Update(ctx, &kBackup); statusErr != nil {
-				log.Error(statusErr, "Failed to update status")
-			}
-			return ctrl.Result{}, fmt.Errorf("UserManager not configured for server mode")
-		}
-
-		secretName, err := r.UserManager.EnsureUser(ctx, &kBackup, repository)
-		if err != nil {
-			var serverNotReady *kopia.ServerNotReadyError
-			if errors.As(err, &serverNotReady) {
-				log.Info("Server not ready, requeuing", "error", err.Error())
-				return ctrl.Result{RequeueAfter: requeueDelay}, nil
-			}
-			return ctrl.Result{}, fmt.Errorf("failed to ensure user: %w", err)
-		}
-
-		kBackup.Spec.UserCredentialsSecret = secretName
-		kBackup.Status.ServerURL = r.ServerManager.GetServerURL(repository)
-		kBackup.Status.Username = fmt.Sprintf("%s-%s@%s", kBackup.Namespace, kBackup.Spec.PVCName, repository.Spec.Hostname)
-		kBackup.Status.Connected = true
-	}
-
-	// --- Manage ConfigMap (direct mode, filesystem only) ---
-	if !repository.Spec.Server.Enabled && repository.Spec.StorageType == backupv1alpha1.StorageTypeFilesystem {
-		if err := r.reconcileConfigMap(ctx, &kBackup, repository); err != nil {
+	// Phase 4: ConfigMap (direct mode, filesystem only)
+	if !repo.Spec.Server.Enabled && repo.Spec.StorageType == backupv1alpha1.StorageTypeFilesystem {
+		if err := r.reconcileConfigMap(ctx, &kBackup, repo); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to reconcile ConfigMap: %w", err)
 		}
 	}
 
-	// --- Find the running pod that mounts the PVC ---
-	nodeName, appName, podName := r.findPodUsingPVC(ctx, &kBackup)
-	if nodeName == "" {
-		r.setCondition(&kBackup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-			backupv1alpha1.ReasonNoPodFound, "No running pod found with the PVC mounted")
-		if statusErr := r.Status().Update(ctx, &kBackup); statusErr != nil {
+	// Phase 5: Find pod, reconcile CronJob, finalize status
+	return r.reconcileBackupResources(ctx, &kBackup, repo)
+}
+
+// --- Reconcile phases ---
+
+// handleFinalizer manages finalizer addition and deletion cleanup.
+// Returns done=true when reconciliation should stop.
+func (r *KopiaBackupReconciler) handleFinalizer(ctx context.Context, backup *backupv1alpha1.KopiaBackup) (bool, error) {
+	log := ctrllog.FromContext(ctx)
+
+	if !backup.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(backup, finalizerName) {
+			log.Info("Running finalizer cleanup")
+			if r.UserManager != nil && backup.Spec.UserCredentialsSecret != "" {
+				repo, err := r.getKopiaRepository(ctx, backup.Spec.Repository, backup.Namespace)
+				if err == nil && repo.Spec.Server.Enabled {
+					if delErr := r.UserManager.DeleteUser(ctx, backup, repo); delErr != nil {
+						log.Error(delErr, "Failed to delete server user during finalization")
+						r.Recorder.Event(backup, corev1.EventTypeWarning, "FinalizerFailed",
+							fmt.Sprintf("Failed to delete server user: %v", delErr))
+					}
+				}
+			}
+			controllerutil.RemoveFinalizer(backup, finalizerName)
+			if err := r.Update(ctx, backup); err != nil {
+				return true, fmt.Errorf("failed to remove finalizer: %w", err)
+			}
+		}
+		return true, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(backup, finalizerName) {
+		controllerutil.AddFinalizer(backup, finalizerName)
+		if err := r.Update(ctx, backup); err != nil {
+			return true, fmt.Errorf("failed to add finalizer: %w", err)
+		}
+	}
+
+	return false, nil
+}
+
+// validateDependencies validates the PVC and repository references.
+// Returns the repository on success, or done=true with an appropriate result on failure.
+// Does not requeue on validation errors — watches on PVCs and KopiaRepositories
+// will trigger re-reconciliation when the missing dependency appears.
+func (r *KopiaBackupReconciler) validateDependencies(
+	ctx context.Context,
+	backup *backupv1alpha1.KopiaBackup,
+) (*backupv1alpha1.KopiaRepository, bool) {
+	log := ctrllog.FromContext(ctx)
+
+	if _, err := r.getRelatedPVC(ctx, backup); err != nil {
+		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			backupv1alpha1.ReasonPVCNotFound, fmt.Sprintf("PVC %q not found: %v", backup.Spec.PVCName, err))
+		if statusErr := r.Status().Update(ctx, backup); statusErr != nil {
 			log.Error(statusErr, "Failed to update status")
 		}
+		r.Recorder.Event(backup, corev1.EventTypeWarning, "PVCNotFound",
+			fmt.Sprintf("PVC %q not found", backup.Spec.PVCName))
+		return nil, true
+	}
+
+	repo, err := r.getKopiaRepository(ctx, backup.Spec.Repository, backup.Namespace)
+	if err != nil {
+		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			backupv1alpha1.ReasonRepositoryNotFound, fmt.Sprintf("KopiaRepository %q not found", backup.Spec.Repository))
+		if statusErr := r.Status().Update(ctx, backup); statusErr != nil {
+			log.Error(statusErr, "Failed to update status")
+		}
+		r.Recorder.Event(backup, corev1.EventTypeWarning, "RepositoryNotFound",
+			fmt.Sprintf("KopiaRepository %q not found", backup.Spec.Repository))
+		return nil, true
+	}
+
+	return repo, false
+}
+
+// reconcileServerCredentials ensures user credentials exist for server mode.
+// Returns done=true if the phase needs to stop reconciliation (error or requeue).
+func (r *KopiaBackupReconciler) reconcileServerCredentials(
+	ctx context.Context,
+	backup *backupv1alpha1.KopiaBackup,
+	repo *backupv1alpha1.KopiaRepository,
+) (ctrl.Result, bool, error) {
+	log := ctrllog.FromContext(ctx)
+
+	if r.UserManager == nil {
+		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			backupv1alpha1.ReasonCronJobFailed, "Server mode requires UserManager to be configured")
+		if statusErr := r.Status().Update(ctx, backup); statusErr != nil {
+			log.Error(statusErr, "Failed to update status")
+		}
+		return ctrl.Result{}, true, fmt.Errorf("UserManager not configured for server mode")
+	}
+
+	secretName, err := r.UserManager.EnsureUser(ctx, backup, repo)
+	if err != nil {
+		var serverNotReady *kopia.ServerNotReadyError
+		if errors.As(err, &serverNotReady) {
+			log.Info("Server not ready, requeuing", "error", err.Error())
+			return ctrl.Result{RequeueAfter: requeueDelay}, true, nil
+		}
+		return ctrl.Result{}, true, fmt.Errorf("failed to ensure user: %w", err)
+	}
+
+	backup.Spec.UserCredentialsSecret = secretName
+	backup.Status.ServerURL = r.ServerManager.GetServerURL(repo)
+	backup.Status.Username = fmt.Sprintf("%s-%s@%s", backup.Namespace, backup.Spec.PVCName, repo.Spec.Hostname)
+	backup.Status.Connected = true
+
+	return ctrl.Result{}, false, nil
+}
+
+// reconcileBackupResources finds the pod using the PVC, reconciles the CronJob, and updates final status.
+func (r *KopiaBackupReconciler) reconcileBackupResources(
+	ctx context.Context,
+	backup *backupv1alpha1.KopiaBackup,
+	repo *backupv1alpha1.KopiaRepository,
+) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+
+	nodeName, appName, podName := r.findPodUsingPVC(ctx, backup)
+	if nodeName == "" {
+		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			backupv1alpha1.ReasonNoPodFound, "No running pod found with the PVC mounted")
+		if statusErr := r.Status().Update(ctx, backup); statusErr != nil {
+			log.Error(statusErr, "Failed to update status")
+		}
+		// Requeue: no watch on all pods; this is a genuinely transient condition.
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
 	}
 
-	kBackup.Status.NodeName = nodeName
+	backup.Status.NodeName = nodeName
 
-	// --- Reconcile the CronJob ---
-	cronJobName := naming.CronJobName(kBackup.Spec.PVCName)
-	kBackup.Status.CronJobName = cronJobName
+	cronJobName := naming.CronJobName(backup.Spec.PVCName)
+	backup.Status.CronJobName = cronJobName
 
-	if err := r.reconcileCronJob(ctx, &kBackup, cronJobName, nodeName, appName, repository); err != nil {
-		r.setCondition(&kBackup, backupv1alpha1.ConditionTypeCronJobCreated, metav1.ConditionFalse,
+	if err := r.reconcileCronJob(ctx, backup, cronJobName, nodeName, appName, repo); err != nil {
+		r.setCondition(backup, backupv1alpha1.ConditionTypeCronJobCreated, metav1.ConditionFalse,
 			backupv1alpha1.ReasonCronJobFailed, err.Error())
-		if statusErr := r.Status().Update(ctx, &kBackup); statusErr != nil {
+		if statusErr := r.Status().Update(ctx, backup); statusErr != nil {
 			log.Error(statusErr, "Failed to update status")
 		}
-		r.Recorder.Event(&kBackup, corev1.EventTypeWarning, "CronJobFailed", err.Error())
+		r.Recorder.Event(backup, corev1.EventTypeWarning, "CronJobFailed", err.Error())
 		return ctrl.Result{}, err
 	}
 
-	r.setCondition(&kBackup, backupv1alpha1.ConditionTypeCronJobCreated, metav1.ConditionTrue,
+	r.setCondition(backup, backupv1alpha1.ConditionTypeCronJobCreated, metav1.ConditionTrue,
 		backupv1alpha1.ReasonReconciled, fmt.Sprintf("CronJob %q is up to date", cronJobName))
 
-	// --- Mark ready ---
-	if kBackup.Spec.Suspend {
-		r.setCondition(&kBackup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+	if backup.Spec.Suspend {
+		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			backupv1alpha1.ReasonSuspended, "Backup is suspended")
 	} else {
-		r.setCondition(&kBackup, backupv1alpha1.ConditionTypeReady, metav1.ConditionTrue,
+		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionTrue,
 			backupv1alpha1.ReasonReconciled, fmt.Sprintf("Backup active on node %s (pod %s)", nodeName, podName))
 	}
-	if err := r.Status().Update(ctx, &kBackup); err != nil {
+	if err := r.Status().Update(ctx, backup); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
@@ -270,62 +301,6 @@ func (r *KopiaBackupReconciler) setCondition(backup *backupv1alpha1.KopiaBackup,
 		Message:            message,
 		ObservedGeneration: backup.Generation,
 	})
-}
-
-func (r *KopiaBackupReconciler) handlePVCRequest(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	var pvc corev1.PersistentVolumeClaim
-	if err := r.Get(ctx, req.NamespacedName, &pvc); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	if pvc.Labels == nil {
-		return ctrl.Result{}, nil
-	}
-	repositoryName, ok := pvc.Labels[repositoryLabelKey]
-	if !ok || repositoryName == "" {
-		return ctrl.Result{}, nil
-	}
-
-	repository, err := r.getKopiaRepository(ctx, repositoryName, pvc.Namespace)
-	if err != nil {
-		log.Info("KopiaRepository not found for PVC", "repository", repositoryName)
-		return ctrl.Result{}, nil
-	}
-
-	newBackup := &backupv1alpha1.KopiaBackup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pvc.Name,
-			Namespace: pvc.Namespace,
-		},
-		Spec: backupv1alpha1.KopiaBackupSpec{
-			PVCName:    pvc.Name,
-			Repository: repositoryName,
-			Schedule:   getScheduleFromPVC(&pvc, repository.Spec.DefaultSchedule),
-		},
-	}
-
-	if err := ctrl.SetControllerReference(&pvc, newBackup, r.Scheme); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to set owner reference: %w", err)
-	}
-
-	if err := r.Create(ctx, newBackup); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("failed to create KopiaBackup: %w", err)
-	}
-
-	newBackup.Status.FromAnnotation = true
-	if err := r.Status().Update(ctx, newBackup); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update KopiaBackup status: %w", err)
-	}
-
-	r.Recorder.Event(newBackup, corev1.EventTypeNormal, "Created",
-		fmt.Sprintf("Auto-created KopiaBackup for PVC %s", pvc.Name))
-	log.Info("Created KopiaBackup from PVC label", "backup", newBackup.Name)
-	return ctrl.Result{}, nil
 }
 
 func (r *KopiaBackupReconciler) getRelatedPVC(ctx context.Context, kBackup *backupv1alpha1.KopiaBackup) (*corev1.PersistentVolumeClaim, error) {
@@ -428,22 +403,11 @@ func (r *KopiaBackupReconciler) reconcileCronJob(
 	return r.Update(ctx, existing)
 }
 
-// --- Pure functions ---
-
-// getScheduleFromPVC reads the backup schedule annotation from a PVC,
-// falling back to defaultSchedule when the annotation is absent.
-func getScheduleFromPVC(pvc *corev1.PersistentVolumeClaim, defaultSchedule string) string {
-	if pvc != nil && pvc.Annotations != nil {
-		if schedule, ok := pvc.Annotations[scheduleAnnotationKey]; ok && schedule != "" {
-			return schedule
-		}
-	}
-	return defaultSchedule
-}
-
 // --- Watch helpers ---
 
-func (r *KopiaBackupReconciler) findObjectsForPVC(ctx context.Context, pvc client.Object) []reconcile.Request {
+// findBackupsForPVC maps PVC changes to KopiaBackup reconcile requests
+// for backups that reference the changed PVC.
+func (r *KopiaBackupReconciler) findBackupsForPVC(ctx context.Context, pvc client.Object) []reconcile.Request {
 	var backups backupv1alpha1.KopiaBackupList
 	if err := r.List(ctx, &backups,
 		client.InNamespace(pvc.GetNamespace()),
@@ -452,25 +416,38 @@ func (r *KopiaBackupReconciler) findObjectsForPVC(ctx context.Context, pvc clien
 		return nil
 	}
 
-	requests := make([]reconcile.Request, 0, len(backups.Items)+1)
+	requests := make([]reconcile.Request, 0, len(backups.Items))
 	for _, item := range backups.Items {
 		requests = append(requests, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace},
 		})
 	}
+	return requests
+}
 
-	// If no existing backup references this PVC, enqueue the PVC name so handlePVCRequest can fire
-	if len(requests) == 0 {
-		requests = append(requests, reconcile.Request{
-			NamespacedName: types.NamespacedName{Name: pvc.GetName(), Namespace: pvc.GetNamespace()},
-		})
+// findBackupsForRepository maps KopiaRepository changes to KopiaBackup reconcile
+// requests for backups that reference the changed repository.
+func (r *KopiaBackupReconciler) findBackupsForRepository(ctx context.Context, repo client.Object) []reconcile.Request {
+	var backups backupv1alpha1.KopiaBackupList
+	if err := r.List(ctx, &backups,
+		client.InNamespace(repo.GetNamespace()),
+		client.MatchingFields{repositoryNameField: repo.GetName()},
+	); err != nil {
+		return nil
 	}
 
+	requests := make([]reconcile.Request, 0, len(backups.Items))
+	for _, item := range backups.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace},
+		})
+	}
 	return requests
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Field indexer for PVC name lookup.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
 		&backupv1alpha1.KopiaBackup{},
@@ -486,6 +463,22 @@ func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	// Field indexer for repository name lookup.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&backupv1alpha1.KopiaBackup{},
+		repositoryNameField,
+		func(rawObj client.Object) []string {
+			backup := rawObj.(*backupv1alpha1.KopiaBackup)
+			if backup.Spec.Repository == "" {
+				return nil
+			}
+			return []string{backup.Spec.Repository}
+		},
+	); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupv1alpha1.KopiaBackup{}).
 		Owns(&batchv1.CronJob{}).
@@ -493,7 +486,12 @@ func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Watches(
 			&corev1.PersistentVolumeClaim{},
-			handler.EnqueueRequestsFromMapFunc(r.findObjectsForPVC),
+			handler.EnqueueRequestsFromMapFunc(r.findBackupsForPVC),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Watches(
+			&backupv1alpha1.KopiaRepository{},
+			handler.EnqueueRequestsFromMapFunc(r.findBackupsForRepository),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)
