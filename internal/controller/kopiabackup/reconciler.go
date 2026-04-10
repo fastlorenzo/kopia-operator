@@ -178,6 +178,7 @@ func (r *KopiaBackupReconciler) handleFinalizer(ctx context.Context, backup *bac
 					}
 				}
 			}
+			kopiaMetrics.CleanupBackupMetrics(backup.Name, backup.Namespace, backup.Spec.PVCName)
 			controllerutil.RemoveFinalizer(backup, finalizerName)
 			if err := r.Update(ctx, backup); err != nil {
 				return true, fmt.Errorf("failed to remove finalizer: %w", err)

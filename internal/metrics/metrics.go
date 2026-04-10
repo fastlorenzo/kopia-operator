@@ -56,3 +56,14 @@ func init() {
 		ServerReady,
 	)
 }
+
+// CleanupBackupMetrics removes metric label sets for a deleted KopiaBackup.
+func CleanupBackupMetrics(backup, namespace, pvc string) {
+	LastSuccessfulBackup.DeleteLabelValues(backup, namespace, pvc)
+}
+
+// CleanupRepositoryMetrics removes metric label sets for a deleted KopiaRepository.
+func CleanupRepositoryMetrics(repository, namespace string) {
+	BackupsPerRepository.DeleteLabelValues(repository, namespace)
+	ServerReady.DeleteLabelValues(repository, namespace)
+}
