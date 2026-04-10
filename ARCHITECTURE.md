@@ -19,40 +19,26 @@ The Kopia Operator is a Kubernetes operator designed to automate backup operatio
 
 The Kopia Operator follows the standard Kubernetes operator pattern built with the [Kubebuilder](https://kubebuilder.io/) framework and [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime). It watches for changes to custom resources and reconciles the actual state with the desired state.
 
-```text
-┌────────────────────────────────────────────────────────────────┐
-│                     Kubernetes Cluster                         │
-│                                                                │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │              Kopia Operator Manager                      │  │
-│  │  ┌────────────────────┐  ┌──────────────────────────┐    │  │
-│  │  │  KopiaBackup       │  │  KopiaRepository         │    │  │
-│  │  │  Reconciler        │  │  Reconciler              │    │  │
-│  │  └────────────────────┘  └──────────────────────────┘    │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                           │                                    │
-│                           ├─────────────┐                      │
-│                           ▼             ▼                      │
-│  ┌──────────────────────────────┐  ┌──────────────────────┐    │
-│  │  KopiaBackup CR              │  │  KopiaRepository CR  │    │
-│  │  - PVC Reference             │  │  - Storage Config    │    │
-│  │  - Schedule                  │  │  - Credentials       │    │
-│  │  - Repository Reference      │  │  - Caching Settings  │    │
-│  └──────────────────────────────┘  └──────────────────────┘    │
-│                           │                                    │
-│                           ▼                                    │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │                    CronJob                               │  │
-│  │  ┌────────────────────────────────────────────────────┐  │  │
-│  │  │           Kopia Backup Job Pod                     │  │  │
-│  │  │  - Mounts PVC (read-only)                          │  │  │
-│  │  │  - Connects to Kopia Repository                    │  │  │
-│  │  │  - Creates Snapshot                                │  │  │
-│  │  │  - Reports Status                                  │  │  │
-│  │  └────────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                │
-└────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph cluster["Kubernetes Cluster"]
+        subgraph manager["Kopia Operator Manager"]
+            BR["KopiaBackup<br/>Reconciler"]
+            RR["KopiaRepository<br/>Reconciler"]
+        end
+
+        BR -->|watches| BackupCR
+        RR -->|watches| RepoCR
+
+        BackupCR["**KopiaBackup CR**<br/>- PVC Reference<br/>- Schedule<br/>- Repository Reference"]
+        RepoCR["**KopiaRepository CR**<br/>- Storage Config<br/>- Credentials<br/>- Caching Settings"]
+
+        BackupCR -->|creates| CJ
+
+        subgraph CJ["CronJob"]
+            Pod["**Kopia Backup Job Pod**<br/>- Mounts PVC read-only<br/>- Connects to Kopia Repository<br/>- Creates Snapshot<br/>- Reports Status"]
+        end
+    end
 ```
 
 ## Custom Resource Definitions (CRDs)
@@ -228,99 +214,30 @@ The main function:
 
 ### Scenario 1: Manual KopiaBackup Creation
 
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. User creates KopiaBackup CR                                  │
-│    - Specifies PVC name                                         │
-│    - Specifies schedule                                         │
-│    - References KopiaRepository                                 │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. KopiaBackupReconciler triggered                              │
-│    - Validates KopiaBackup exists                               │
-│    - Updates status (Active = !Suspend)                         │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. Validate dependencies                                        │
-│    - Check if PVC exists                                        │
-│    - Check if KopiaRepository exists                            │
-│    - Validate repository configuration                          │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. Create ConfigMap (filesystem storage only)                   │
-│    - Contains repository configuration                          │
-│    - Mounted into backup pods                                   │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 5. Discover runtime information                                 │
-│    - Find pod mounting the PVC                                  │
-│    - Extract node name, app name, pod name                      │
-│    - Skip pods starting with "snapshot-"                        │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 6. Create/Update CronJob                                        │
-│    - Schedule based on KopiaBackup.Spec.Schedule                │
-│    - Pin to same node as application pod                        │
-│    - Mount PVC and repository                                   │
-│    - Set owner reference for garbage collection                 │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 7. CronJob executes on schedule                                 │
-│    - Init container: waits 1-900 seconds (randomization)        │
-│    - Main container: runs Kopia snapshot commands               │
-│    - Reports statistics and maintenance info                    │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["1. User creates KopiaBackup CR<br/>- Specifies PVC name<br/>- Specifies schedule<br/>- References KopiaRepository"]
+    B["2. KopiaBackupReconciler triggered<br/>- Validates KopiaBackup exists<br/>- Updates status (Active = !Suspend)"]
+    C["3. Validate dependencies<br/>- Check if PVC exists<br/>- Check if KopiaRepository exists<br/>- Validate repository configuration"]
+    D["4. Create ConfigMap (filesystem storage only)<br/>- Contains repository configuration<br/>- Mounted into backup pods"]
+    E["5. Discover runtime information<br/>- Find pod mounting the PVC<br/>- Extract node name, app name, pod name<br/>- Skip pods starting with 'snapshot-'"]
+    F["6. Create/Update CronJob<br/>- Schedule based on KopiaBackup.Spec.Schedule<br/>- Pin to same node as application pod<br/>- Mount PVC and repository<br/>- Set owner reference for garbage collection"]
+    G["7. CronJob executes on schedule<br/>- Init container: waits 1-900s (randomization)<br/>- Main container: runs Kopia snapshot commands<br/>- Reports statistics and maintenance info"]
+
+    A --> B --> C --> D --> E --> F --> G
 ```
 
 ### Scenario 2: Automatic Creation from PVC Annotation
 
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. User creates/updates PVC with label:                         │
-│    backup.cloudinfra.be/repository: <repository-name>           │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. PVC Watch triggers reconciliation                            │
-│    - KopiaBackupReconciler.findObjectsForPVC() called           │
-│    - No existing KopiaBackup found                              │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. Reconciler processes PVC request                             │
-│    - handlePVCRequest() invoked                                 │
-│    - Validates repository label exists                          │
-│    - Validates KopiaRepository exists                           │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. Auto-create KopiaBackup                                      │
-│    - Name: same as PVC name                                     │
-│    - Namespace: same as PVC namespace                           │
-│    - Schedule: from repository's DefaultSchedule                │
-│    - Set PVC as owner (for cascade deletion)                    │
-│    - Mark Status.FromAnnotation = true                          │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 5. Continue with standard flow (steps 3-7 from Scenario 1)      │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["1. User creates/updates PVC with label:<br/>backup.cloudinfra.be/repository: &lt;repository-name&gt;"]
+    B["2. PVC Watch triggers reconciliation<br/>- KopiaBackupReconciler.findObjectsForPVC() called<br/>- No existing KopiaBackup found"]
+    C["3. Reconciler processes PVC request<br/>- handlePVCRequest() invoked<br/>- Validates repository label exists<br/>- Validates KopiaRepository exists"]
+    D["4. Auto-create KopiaBackup<br/>- Name: same as PVC name<br/>- Namespace: same as PVC namespace<br/>- Schedule: from repository's DefaultSchedule<br/>- Set PVC as owner (for cascade deletion)<br/>- Mark Status.FromAnnotation = true"]
+    E["5. Continue with standard flow<br/>(steps 3-7 from Scenario 1)"]
+
+    A --> B --> C --> D --> E
 ```
 
 ## Reconciliation Logic
