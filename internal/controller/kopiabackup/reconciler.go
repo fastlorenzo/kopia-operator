@@ -489,6 +489,8 @@ func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupv1alpha1.KopiaBackup{}).
 		Owns(&batchv1.CronJob{}).
+		Owns(&corev1.Secret{}).
+		Owns(&corev1.ConfigMap{}).
 		Watches(
 			&corev1.PersistentVolumeClaim{},
 			handler.EnqueueRequestsFromMapFunc(r.findObjectsForPVC),

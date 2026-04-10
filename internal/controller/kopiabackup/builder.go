@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 	"github.com/fastlorenzo/kopia-operator/internal/naming"
@@ -132,8 +133,8 @@ func buildCronJob(
 			ConcurrencyPolicy:          batchv1.ForbidConcurrent,
 			Schedule:                   backup.Spec.Schedule,
 			Suspend:                    &backup.Spec.Suspend,
-			SuccessfulJobsHistoryLimit: int32Ptr(maxBackupHistoryEntries),
-			FailedJobsHistoryLimit:     int32Ptr(maxBackupHistoryEntries),
+			SuccessfulJobsHistoryLimit: ptr.To(int32(maxBackupHistoryEntries)),
+			FailedJobsHistoryLimit:     ptr.To(int32(maxBackupHistoryEntries)),
 			JobTemplate: batchv1.JobTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
@@ -314,7 +315,7 @@ func buildDirectModeConfig(
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
 						SecretName:  repo.Spec.SFTPOptions.CredentialsSecret,
-						DefaultMode: int32Ptr(0600),
+						DefaultMode: ptr.To(int32(0600)),
 					},
 				},
 			},
@@ -371,8 +372,8 @@ type kopiaConfigData struct {
 }
 
 type kopiaConfigStorage struct {
-	Type   string                 `json:"type"`
-	Config map[string]interface{} `json:"config"`
+	Type   string `json:"type"`
+	Config any    `json:"config"`
 }
 
 type kopiaConfigCaching struct {
@@ -382,11 +383,43 @@ type kopiaConfigCaching struct {
 	MaxListCacheDuration int64  `json:"maxListCacheDuration"`
 }
 
+// filesystemStorageConfig is the Kopia storage config for filesystem backends.
+type filesystemStorageConfig struct {
+	Path      string `json:"path"`
+	DirShards *[]int `json:"dirShards"`
+}
+
+// sftpStorageConfig is the Kopia storage config for SFTP backends.
+type sftpStorageConfig struct {
+	Path           string `json:"path"`
+	Host           string `json:"host"`
+	Port           int    `json:"port,omitempty"`
+	KnownHostsData string `json:"knownHostsData,omitempty"`
+	ExternalSSH    bool   `json:"externalSSH,omitempty"`
+	SSHCommand     string `json:"sshCommand,omitempty"`
+	DirShards      []int  `json:"dirShards,omitempty"`
+}
+
 // buildConfigMap builds the Kopia repository.config ConfigMap for direct mode.
 func buildConfigMap(backup *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.KopiaRepository) (*corev1.ConfigMap, error) {
-	storageConfig := map[string]interface{}{
-		"path":      repo.Spec.FileSystemOptions.Path,
-		"dirShards": nil,
+	var storageConfig any
+	switch repo.Spec.StorageType {
+	case backupv1alpha1.StorageTypeFilesystem:
+		storageConfig = filesystemStorageConfig{
+			Path: repo.Spec.FileSystemOptions.Path,
+		}
+	case backupv1alpha1.StorageTypeSFTP:
+		storageConfig = sftpStorageConfig{
+			Path:           repo.Spec.SFTPOptions.Path,
+			Host:           repo.Spec.SFTPOptions.Host,
+			Port:           repo.Spec.SFTPOptions.Port,
+			KnownHostsData: repo.Spec.SFTPOptions.KnownHostsData,
+			ExternalSSH:    repo.Spec.SFTPOptions.ExternalSSH,
+			SSHCommand:     repo.Spec.SFTPOptions.SSHCommand,
+			DirShards:      repo.Spec.SFTPOptions.DirShards,
+		}
+	default:
+		return nil, fmt.Errorf("unsupported storage type: %s", repo.Spec.StorageType)
 	}
 
 	cfg := kopiaConfigData{
@@ -424,9 +457,4 @@ func buildConfigMap(backup *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.Kop
 			"repository.config": string(data),
 		},
 	}, nil
-}
-
-// int32Ptr returns a pointer to an int32.
-func int32Ptr(i int32) *int32 {
-	return &i
 }

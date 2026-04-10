@@ -157,6 +157,11 @@ var _ = Describe("CronJob Builder", func() {
 
 			storage := config["storage"].(map[string]interface{})
 			Expect(storage["type"]).To(Equal("sftp"))
+
+			storageConfig := storage["config"].(map[string]interface{})
+			Expect(storageConfig["path"]).To(Equal("/backups/kopia"))
+			Expect(storageConfig["host"]).To(Equal("sftp.example.com"))
+			Expect(storageConfig["port"]).To(BeNumerically("==", 22))
 		})
 
 		It("should include hostname and username", func() {
@@ -231,13 +236,6 @@ var _ = Describe("CronJob Builder", func() {
 				mountPaths = append(mountPaths, vm.MountPath)
 			}
 			Expect(mountPaths).To(ContainElement("/config/repository.config"))
-		})
-	})
-
-	Context("int32Ptr", func() {
-		It("should return a pointer to the value", func() {
-			p := int32Ptr(42)
-			Expect(*p).To(Equal(int32(42)))
 		})
 	})
 

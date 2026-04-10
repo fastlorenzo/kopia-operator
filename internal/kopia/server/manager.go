@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -166,7 +167,7 @@ func (m *KopiaServerManager) constructServerDeployment(
 				SecretKeyRef: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{Name: tlsSecretName},
 					Key:                  "fingerprint",
-					Optional:             boolPtr(true),
+					Optional:             ptr.To(true),
 				},
 			},
 		},
@@ -186,7 +187,7 @@ func (m *KopiaServerManager) constructServerDeployment(
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
 					SecretName:  tlsSecretName,
-					DefaultMode: int32Ptr(0400),
+					DefaultMode: ptr.To(int32(0400)),
 				},
 			},
 		},
@@ -205,7 +206,7 @@ func (m *KopiaServerManager) constructServerDeployment(
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
 					SecretName:  repo.Spec.SFTPOptions.CredentialsSecret,
-					DefaultMode: int32Ptr(0600),
+					DefaultMode: ptr.To(int32(0600)),
 				},
 			},
 		})
@@ -710,12 +711,4 @@ func generateSelfSignedCert(commonName string, dnsNames []string) ([]byte, []byt
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
 
 	return certPEM, keyPEM, nil
-}
-
-func int32Ptr(i int32) *int32 {
-	return &i
-}
-
-func boolPtr(b bool) *bool {
-	return &b
 }
