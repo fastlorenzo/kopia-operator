@@ -25,6 +25,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -413,8 +414,15 @@ func (r *KopiaBackupReconciler) reconcileCronJob(
 
 	existing.Spec.Schedule = desired.Spec.Schedule
 	existing.Spec.Suspend = desired.Spec.Suspend
+	existing.Spec.ConcurrencyPolicy = desired.Spec.ConcurrencyPolicy
+	existing.Spec.SuccessfulJobsHistoryLimit = desired.Spec.SuccessfulJobsHistoryLimit
+	existing.Spec.FailedJobsHistoryLimit = desired.Spec.FailedJobsHistoryLimit
 	existing.Spec.JobTemplate.Spec.Template.Spec = desired.Spec.JobTemplate.Spec.Template.Spec
 	existing.Spec.JobTemplate.Spec.Suspend = desired.Spec.JobTemplate.Spec.Suspend
+
+	if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+		return nil
+	}
 	return r.Update(ctx, existing)
 }
 
