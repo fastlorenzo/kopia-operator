@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: kopia-operator
-  newTag: dev
+  newTag: e2e-test
