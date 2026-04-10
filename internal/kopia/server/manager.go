@@ -38,6 +38,11 @@ type KopiaServerManager struct {
 	Scheme *runtime.Scheme
 }
 
+const (
+	// defaultServerPort is the default port for the Kopia Server API.
+	defaultServerPort = 51515
+)
+
 // shellQuote wraps a value in single quotes with proper escaping for safe
 // interpolation into shell scripts. Single quotes inside the value are escaped
 // using the standard shell idiom: end quote, escaped quote, restart quote.
@@ -122,7 +127,7 @@ func (m *KopiaServerManager) EnsureServerService(
 // GetServerURL returns the in-cluster URL for the Kopia Server.
 func (m *KopiaServerManager) GetServerURL(repo *backupv1alpha1.KopiaRepository) string {
 	serviceName := naming.ServerServiceName(repo.Name)
-	port := int32(51515)
+	port := int32(defaultServerPort)
 	if repo.Spec.Server.Exposure.ServicePort != 0 {
 		port = repo.Spec.Server.Exposure.ServicePort
 	}
@@ -240,12 +245,12 @@ func (m *KopiaServerManager) constructServerDeployment(
 		Env:             env,
 		VolumeMounts:    volumeMounts,
 		Ports: []corev1.ContainerPort{
-			{Name: "api", ContainerPort: 51515, Protocol: corev1.ProtocolTCP},
+			{Name: "api", ContainerPort: defaultServerPort, Protocol: corev1.ProtocolTCP},
 		},
 		Resources: repo.Spec.Server.Resources,
 		LivenessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
-				TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(51515)},
+				TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(defaultServerPort)},
 			},
 			InitialDelaySeconds: 30,
 			PeriodSeconds:       10,
@@ -257,7 +262,7 @@ func (m *KopiaServerManager) constructServerDeployment(
 				Exec: &corev1.ExecAction{
 					Command: []string{"/bin/sh", "-c",
 						`FINGERPRINT="${KOPIA_TLS_FINGERPRINT:-$(openssl x509 -in /tls/tls.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':')}" && ` +
-							`kopia server status --address=https://127.0.0.1:51515 --server-username=admin --server-password="$KOPIA_SERVER_PASSWORD" --server-cert-fingerprint=$FINGERPRINT`,
+							fmt.Sprintf(`kopia server status --address=https://127.0.0.1:%d --server-username=admin --server-password="$KOPIA_SERVER_PASSWORD" --server-cert-fingerprint=$FINGERPRINT`, defaultServerPort),
 					},
 				},
 			},
@@ -313,7 +318,7 @@ func (m *KopiaServerManager) constructServerService(
 		serviceType = repo.Spec.Server.Exposure.ServiceType
 	}
 
-	servicePort := int32(51515)
+	servicePort := int32(defaultServerPort)
 	if repo.Spec.Server.Exposure.ServicePort != 0 {
 		servicePort = repo.Spec.Server.Exposure.ServicePort
 	}
@@ -328,7 +333,7 @@ func (m *KopiaServerManager) constructServerService(
 			Type:     serviceType,
 			Selector: labels,
 			Ports: []corev1.ServicePort{
-				{Name: "api", Port: servicePort, TargetPort: intstr.FromInt(51515), Protocol: corev1.ProtocolTCP},
+				{Name: "api", Port: servicePort, TargetPort: intstr.FromInt(defaultServerPort), Protocol: corev1.ProtocolTCP},
 			},
 		},
 	}
@@ -483,8 +488,8 @@ if [ -z "$SFTP_USER" ]; then echo "ERROR: SFTP username not found in secret"; ex
 // writeSFTPAuthFlags appends SFTP authentication flags to the given command variable.
 func (m *KopiaServerManager) writeSFTPAuthFlags(b *strings.Builder, repo *backupv1alpha1.KopiaRepository, cmdVar string) {
 	fmt.Fprintf(b, `if [ -n "$SFTP_KEY" ]; then
-  echo "$SFTP_KEY" > /tmp/ssh_key && chmod 600 /tmp/ssh_key
-  %s="$%s --keyfile=/tmp/ssh_key"
+  SSH_KEY_FILE=$(mktemp /tmp/ssh_key.XXXXXX) && echo "$SFTP_KEY" > "$SSH_KEY_FILE" && chmod 600 "$SSH_KEY_FILE"
+  %s="$%s --keyfile=$SSH_KEY_FILE"
 elif [ -n "$SFTP_PASSWORD" ]; then
   %s="$%s --sftp-password=$SFTP_PASSWORD"
 else
@@ -529,7 +534,7 @@ func (m *KopiaServerManager) writeServerStartCommand(b *strings.Builder, repo *b
 	b.WriteString("kopia server start \\\n")
 	b.WriteString("  --tls-cert-file=/tls/tls.crt \\\n")
 	b.WriteString("  --tls-key-file=/tls/tls.key \\\n")
-	b.WriteString("  --address=0.0.0.0:51515 \\\n")
+	fmt.Fprintf(b, "  --address=0.0.0.0:%d \\\n", defaultServerPort)
 	b.WriteString("  --server-control-username=admin \\\n")
 	b.WriteString("  --server-control-password=\"${KOPIA_SERVER_PASSWORD}\"")
 	for _, arg := range repo.Spec.Server.ExtraArgs {
