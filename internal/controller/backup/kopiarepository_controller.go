@@ -18,67 +18,62 @@ package backup
 
 import (
 	"context"
-	"slices"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
-	"github.com/go-logr/logr"
 )
 
-// KopiaRepositoryReconciler reconciles a KopiaRepository object
+// KopiaRepositoryReconciler reconciles a KopiaRepository object.
 type KopiaRepositoryReconciler struct {
 	client.Client
-	Scheme               *runtime.Scheme
-	Log                  logr.Logger
-	SupporedStorageTypes []string
+	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories/finalizers,verbs=update
+// +kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the KopiaRepository object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.3/pkg/reconcile
 func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.Log.WithValues("kopiarepository", req.NamespacedName)
+	log := ctrllog.FromContext(ctx)
 
-	r.SupporedStorageTypes = []string{"filesystem", "sftp"}
-
-	// Check that the storage type is one of the supported ones
-	// Get all the KopiaRepository objects
-	// For each KopiaRepository object, check if the storage type is supported
-	// If the storage type is not supported, log an error and return
-	// If the storage type is supported, continue with the reconciliation
-
-	kopiaRepos := &backupv1alpha1.KopiaRepositoryList{}
-	if err := r.List(ctx, kopiaRepos); err != nil {
-		return ctrl.Result{}, err
+	var repo backupv1alpha1.KopiaRepository
+	if err := r.Get(ctx, req.NamespacedName, &repo); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Check each repository for correctnes in configuration
-	for _, repo := range kopiaRepos.Items {
+	log.Info("Reconciling KopiaRepository", "name", repo.Name)
 
-		// Check if Spec.StorageType is supported
-		if !slices.Contains(r.SupporedStorageTypes, repo.Spec.StorageType) {
-			log.Info("unsupported storage type", "storageType", repo.Spec.StorageType, repo.Name)
-			return ctrl.Result{}, nil
+	// Validate password secret reference
+	if repo.Spec.PasswordSecretName == "" {
+		meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+			Type:               backupv1alpha1.ConditionTypeRepositoryReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             backupv1alpha1.ReasonMissingPassword,
+			Message:            "spec.passwordSecretName must be set",
+			ObservedGeneration: repo.Generation,
+		})
+		if err := r.Status().Update(ctx, &repo); err != nil {
+			return ctrl.Result{}, err
 		}
+		return ctrl.Result{}, nil
+	}
 
-		// Check if Spec.RepositoryPasswordExistingSecret or Spec.RepositoryPassword is set
-		if repo.Spec.RepositoryPasswordExistingSecret == "" && repo.Spec.RepositoryPassword == "" {
-			log.Info("Either Spec.RepositoryPasswordExistingSecret or Spec.RepositoryPassword must be set", repo.Name)
-			return ctrl.Result{}, nil
-		}
+	// All checks passed
+	meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+		Type:               backupv1alpha1.ConditionTypeRepositoryReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             backupv1alpha1.ReasonConfigValid,
+		Message:            "Repository configuration is valid",
+		ObservedGeneration: repo.Generation,
+	})
+	if err := r.Status().Update(ctx, &repo); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
