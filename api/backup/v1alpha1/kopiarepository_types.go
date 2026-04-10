@@ -84,6 +84,8 @@ type KopiaServerExposureSpec struct {
 
 	// Port for the Kopia Server service.
 	// +kubebuilder:default:=51515
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	ServicePort int32 `json:"servicePort,omitempty"`
 }
@@ -171,6 +173,8 @@ type KopiaRepositoryStorageSFTPSpec struct {
 
 	// SFTP server port.
 	// +kubebuilder:default:=22
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	Port int `json:"port,omitempty"`
 
@@ -222,17 +226,21 @@ type KopiaRepositoryCachingSpec struct {
 
 	// Maximum duration (in seconds) to cache directory listings.
 	// +kubebuilder:default:=30
+	// +kubebuilder:validation:Minimum=0
 	MaxListCacheDuration int64 `json:"maxListCacheDuration,omitempty"`
 
 	// Minimum age (in seconds) of metadata before it can be swept.
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	MinMetadataSweepAge int64 `json:"minMetadataSweepAge,omitempty"`
 
 	// Minimum age (in seconds) of content before it can be swept.
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	MinContentSweepAge int64 `json:"minContentSweepAge,omitempty"`
 
 	// Minimum age (in seconds) of index entries before they can be swept.
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	MinIndexSweepAge int64 `json:"minIndexSweepAge,omitempty"`
 }

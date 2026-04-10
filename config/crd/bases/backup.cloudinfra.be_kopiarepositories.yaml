@@ -83,6 +83,7 @@ spec:
                     description: Maximum duration (in seconds) to cache directory
                       listings.
                     format: int64
+                    minimum: 0
                     type: integer
                   metadataCacheSize:
                     anyOf:
@@ -103,16 +104,19 @@ spec:
                     description: Minimum age (in seconds) of content before it can
                       be swept.
                     format: int64
+                    minimum: 0
                     type: integer
                   minIndexSweepAge:
                     description: Minimum age (in seconds) of index entries before
                       they can be swept.
                     format: int64
+                    minimum: 0
                     type: integer
                   minMetadataSweepAge:
                     description: Minimum age (in seconds) of metadata before it can
                       be swept.
                     format: int64
+                    minimum: 0
                     type: integer
                 type: object
               defaultSchedule:
@@ -200,6 +204,8 @@ spec:
                         default: 51515
                         description: Port for the Kopia Server service.
                         format: int32
+                        maximum: 65535
+                        minimum: 1
                         type: integer
                       serviceType:
                         default: ClusterIP
@@ -348,6 +354,8 @@ spec:
                   port:
                     default: 22
                     description: SFTP server port.
+                    maximum: 65535
+                    minimum: 1
                     type: integer
                   sshCommand:
                     default: ssh

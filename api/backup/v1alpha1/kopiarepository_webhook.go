@@ -75,6 +75,9 @@ func validateKopiaRepository(repo *KopiaRepository) (admission.Warnings, error) 
 		if repo.Spec.SFTPOptions.CredentialsSecret == "" {
 			allErrs = append(allErrs, "spec.sftpOptions.credentialsSecret is required when storageType is \"sftp\"")
 		}
+	default:
+		allErrs = append(allErrs, fmt.Sprintf("unsupported storageType %q, must be one of: %q, %q",
+			repo.Spec.StorageType, StorageTypeFilesystem, StorageTypeSFTP))
 	}
 
 	if repo.Spec.Server.Enabled && repo.Spec.Server.AdminPasswordSecretName == "" {
