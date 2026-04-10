@@ -1,158 +1,170 @@
-# kopia-operator
+# Kopia Operator
 
-Simple Kubernetes operator to manage Kopia backup operations of PVC.
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Go Report Card](https://goreportcard.com/badge/github.com/fastlorenzo/kopia-operator)](https://goreportcard.com/report/github.com/fastlorenzo/kopia-operator)
 
-## Description
+A Kubernetes operator for managing [Kopia](https://kopia.io/) backup operations for Persistent Volume Claims (PVCs).
 
-This is a simple Kubernetes operator to manage Kopia backup operations of PVC.
-The operator watches for PVCs with a specific annotation and creates a Kopia backup of the PVC.
-The operator also watches for Kopia backup CRs to plan and execute backup operations using CronJob.
+## Features
 
-This project is provided as-is, and might have bugs or issues. Please report them in the issues section.
-I'm not responsible for any data loss or corruption caused by using this project.
+- **Automated PVC Backups**: Schedule backups for PVCs using Kubernetes CronJobs
+- **Annotation-based Discovery**: Automatically create backups for PVCs with the `backup.cloudinfra.be/repository` label
+- **Server Mode**: Deploy a centralized Kopia Server for enhanced security and management
+- **Direct Mode**: Connect directly to storage backends (NFS, SFTP) for simpler setups
+- **Multiple Storage Backends**: Support for filesystem (NFS) and SFTP storage
+- **Per-backup User Isolation**: Each backup gets its own credentials when using server mode
 
-## PVC Labels and Annotations
+## Architecture
 
-### Labels
+The operator uses two Custom Resource Definitions (CRDs):
 
-| Label | Required | Description |
-|-------|----------|-------------|
-| `backup.cloudinfra.be/repository` | Yes | Name of the `KopiaRepository` CR to use for backup. When set, the operator auto-creates a `KopiaBackup` CR for this PVC. |
+- **KopiaRepository**: Defines the backup destination (storage backend, credentials, server configuration)
+- **KopiaBackup**: Defines what to backup (PVC reference, schedule, repository reference)
 
-### Annotations
+For detailed architecture information, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-| Annotation | Required | Description |
-|------------|----------|-------------|
-| `backup.cloudinfra.be/schedule` | No | Cron schedule override for this PVC's backup (e.g., `0 3 * * *`). When absent, the `KopiaRepository.spec.defaultSchedule` is used. The operator syncs this annotation to `KopiaBackup.spec.schedule` on every reconcile for auto-created backups. |
+## Quick Start
 
-### Example
+### Prerequisites
+
+- Kubernetes cluster v1.24+
+- kubectl configured to access your cluster
+- A storage backend (NFS share or SFTP server)
+
+### Installation
+
+1. **Install CRDs:**
+
+   ```sh
+   make install
+   ```
+
+2. **Deploy the operator:**
+
+   ```sh
+   make deploy IMG=ghcr.io/fastlorenzo/kopia-operator:latest
+   ```
+
+### Create a Repository
+
+```yaml
+apiVersion: backup.cloudinfra.be/v1alpha1
+kind: KopiaRepository
+metadata:
+  name: my-backup-repo
+spec:
+  hostname: kopia-host
+  username: kopia-user
+  storageType: filesystem
+  passwordSecretName: kopia-password-secret
+  fileSystemOptions:
+    path: /backups
+    nfsServer: nfs.example.com
+    nfsPath: /exports/backups
+```
+
+### Create a Backup
+
+```yaml
+apiVersion: backup.cloudinfra.be/v1alpha1
+kind: KopiaBackup
+metadata:
+  name: my-pvc-backup
+spec:
+  pvcName: my-data-pvc
+  repository: my-backup-repo
+  schedule: "0 2 * * *"  # Daily at 2 AM
+```
+
+### Auto-discovery with Labels
+
+Add a label to your PVC to automatically create backups:
 
 ```yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: my-data
+  name: my-data-pvc
   labels:
-    backup.cloudinfra.be/repository: sftprepo
-  annotations:
-    backup.cloudinfra.be/schedule: "0 3 * * *"  # daily at 03:00
+    backup.cloudinfra.be/repository: my-backup-repo
 spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 10Gi
+  # ... PVC spec
 ```
 
-When the annotation is changed, the operator updates the `KopiaBackup` and its associated `CronJob` on the next reconcile. Removing the annotation reverts to the repository default schedule.
+## Server Mode
 
-## Getting Started
+For enhanced security, you can enable server mode which deploys a centralized Kopia Server:
+
+```yaml
+apiVersion: backup.cloudinfra.be/v1alpha1
+kind: KopiaRepository
+metadata:
+  name: my-server-repo
+spec:
+  hostname: kopia-host
+  username: kopia-user
+  storageType: filesystem
+  passwordSecretName: kopia-password-secret
+  server:
+    enabled: true
+    image: ghcr.io/fastlorenzo/kopia:0.20.1
+  fileSystemOptions:
+    path: /backups
+    nfsServer: nfs.example.com
+    nfsPath: /exports/backups
+```
+
+Benefits of server mode:
+- Storage credentials only exist on the server
+- Per-backup user isolation
+- Centralized monitoring and logging
+- TLS encryption for all connections
+
+## Development
 
 ### Prerequisites
 
-- go version v1.21.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+- Go 1.21+
+- Docker
+- kubectl
+- Access to a Kubernetes cluster
 
-### To Deploy on the cluster
-
-**Build and push your image to the location specified by `IMG`:**
+### Build
 
 ```sh
-make docker-build docker-push IMG=<some-registry>/kopia-operator:tag
+make build
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don't work.
-
-**Install the CRDs into the cluster:**
+### Run locally
 
 ```sh
-make install
+make run
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+### Run tests
 
 ```sh
-make deploy IMG=<some-registry>/kopia-operator:tag
+make test
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-> privileges or be logged in as admin.
+## Documentation
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
-
-```sh
-kubectl apply -k config/samples/
-```
-
-> **NOTE**: Ensure that the samples has default values to test it out.
-
-### To Uninstall
-
-**Delete the instances (CRs) from the cluster:**
-
-```sh
-kubectl delete -k config/samples/
-```
-
-**Delete the APIs(CRDs) from the cluster:**
-
-```sh
-make uninstall
-```
-
-**UnDeploy the controller from the cluster:**
-
-```sh
-make undeploy
-```
-
-## Project Distribution
-
-Following are the steps to build the installer and distribute this project to users.
-
-1. Build the installer for the image built and published in the registry:
-
-   ```sh
-   make build-installer IMG=<some-registry>/kopia-operator:tag
-   ```
-
-   NOTE: The makefile target mentioned above generates an 'install.yaml'
-   file in the dist directory. This file contains all the resources built
-   with Kustomize, which are necessary to install this project without
-   its dependencies.
-
-2. Using the installer
-
-   Users can just run kubectl apply -f <URL for YAML BUNDLE> to install the project, i.e.:
-
-   ```sh
-   kubectl apply -f https://raw.githubusercontent.com/<org>/kopia-operator/<tag or branch>/dist/install.yaml
-   ```
+- [Architecture](ARCHITECTURE.md)
+- [SFTP Configuration](docs/sftp-configuration.md)
+- [Server Passwords](docs/server-passwords.md)
+- [Examples](docs/EXAMPLES.md)
 
 ## Contributing
 
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
+## Disclaimer
 
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+This project is provided as-is. Please test thoroughly before using in production.
+Always maintain separate backups and verify your backup strategy.
 
 ## License
 
-Copyright 2024.
+Copyright 2024-2025.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
