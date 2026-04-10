@@ -16,6 +16,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -75,7 +76,12 @@ func (m *KopiaServerManager) EnsureServerDeployment(
 		return m.Client.Create(ctx, desired)
 	}
 
-	existing.Spec = desired.Spec
+	existing.Spec.Replicas = desired.Spec.Replicas
+	existing.Spec.Selector = desired.Spec.Selector
+	existing.Spec.Template = desired.Spec.Template
+	if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+		return nil
+	}
 	logger.Info("Updating Kopia Server Deployment", "name", deploymentName)
 	return m.Client.Update(ctx, existing)
 }
@@ -106,6 +112,9 @@ func (m *KopiaServerManager) EnsureServerService(
 	existing.Spec.Ports = desired.Spec.Ports
 	existing.Spec.Type = desired.Spec.Type
 	existing.Spec.Selector = desired.Spec.Selector
+	if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+		return nil
+	}
 	logger.Info("Updating Kopia Server Service", "name", serviceName)
 	return m.Client.Update(ctx, existing)
 }
