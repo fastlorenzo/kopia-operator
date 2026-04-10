@@ -431,11 +431,13 @@ func (r *KopiaBackupReconciler) reconcileCronJob(
 // findBackupsForPVC maps PVC changes to KopiaBackup reconcile requests
 // for backups that reference the changed PVC.
 func (r *KopiaBackupReconciler) findBackupsForPVC(ctx context.Context, pvc client.Object) []reconcile.Request {
+	log := ctrllog.FromContext(ctx)
 	var backups backupv1alpha1.KopiaBackupList
 	if err := r.List(ctx, &backups,
 		client.InNamespace(pvc.GetNamespace()),
 		client.MatchingFields{pvcNameField: pvc.GetName()},
 	); err != nil {
+		log.Error(err, "Failed to list KopiaBackups for PVC", "pvc", pvc.GetName(), "namespace", pvc.GetNamespace())
 		return nil
 	}
 
@@ -451,11 +453,13 @@ func (r *KopiaBackupReconciler) findBackupsForPVC(ctx context.Context, pvc clien
 // findBackupsForRepository maps KopiaRepository changes to KopiaBackup reconcile
 // requests for backups that reference the changed repository.
 func (r *KopiaBackupReconciler) findBackupsForRepository(ctx context.Context, repo client.Object) []reconcile.Request {
+	log := ctrllog.FromContext(ctx)
 	var backups backupv1alpha1.KopiaBackupList
 	if err := r.List(ctx, &backups,
 		client.InNamespace(repo.GetNamespace()),
 		client.MatchingFields{repositoryNameField: repo.GetName()},
 	); err != nil {
+		log.Error(err, "Failed to list KopiaBackups for repository", "repository", repo.GetName(), "namespace", repo.GetNamespace())
 		return nil
 	}
 
@@ -471,8 +475,9 @@ func (r *KopiaBackupReconciler) findBackupsForRepository(ctx context.Context, re
 // SetupWithManager sets up the controller with the Manager.
 func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Field indexer for PVC name lookup.
+	ctx := context.Background()
 	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
+		ctx,
 		&backupv1alpha1.KopiaBackup{},
 		pvcNameField,
 		func(rawObj client.Object) []string {
@@ -488,7 +493,7 @@ func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	// Field indexer for repository name lookup.
 	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
+		ctx,
 		&backupv1alpha1.KopiaBackup{},
 		repositoryNameField,
 		func(rawObj client.Object) []string {
