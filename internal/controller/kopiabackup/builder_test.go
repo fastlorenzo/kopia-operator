@@ -116,6 +116,28 @@ var _ = Describe("CronJob Builder", func() {
 			Expect(affinity).NotTo(BeNil())
 			Expect(affinity.NodeAffinity).NotTo(BeNil())
 		})
+
+		It("should use pvc-only mount path when appName is empty", func() {
+			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "", repo, "kopia/kopia:latest")
+			container := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+			// With empty appName, mount path should be /data/<namespace>/<pvc> (no app segment)
+			Expect(container.Args[2]).To(ContainSubstring("/data/default/my-pvc"))
+			Expect(container.Args[2]).NotTo(ContainSubstring("/data/default//my-pvc"))
+		})
+
+		It("should set empty app label when appName is empty", func() {
+			cj := buildCronJob(backup, "snapshot-my-pvc", "", "", repo, "")
+			labels := cj.Spec.JobTemplate.Spec.Template.ObjectMeta.Labels
+			Expect(labels["app.kubernetes.io/name"]).To(Equal(""))
+			Expect(labels["backup.cloudinfra.be/node-name"]).To(Equal(""))
+		})
+
+		It("should set node affinity with empty nodeName", func() {
+			cj := buildCronJob(backup, "snapshot-my-pvc", "", "my-app", repo, "")
+			terms := cj.Spec.JobTemplate.Spec.Template.Spec.Affinity.NodeAffinity.
+				RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+			Expect(terms[0].MatchExpressions[0].Values).To(Equal([]string{""}))
+		})
 	})
 
 	Context("buildConfigMap", func() {
@@ -210,6 +232,39 @@ var _ = Describe("CronJob Builder", func() {
 			_ = volumes
 			_ = volumeMounts
 		})
+
+		It("should not include TLS fingerprint env when empty", func() {
+			repo.Spec.Server.Enabled = true
+			repo.Status.TLSCertFingerprint = ""
+
+			envVars, _, _, _ := buildServerModeConfig(
+				backup, repo,
+				nil, nil, nil, nil,
+			)
+
+			for _, env := range envVars {
+				Expect(env.Name).NotTo(Equal("KOPIA_TLS_FINGERPRINT"))
+			}
+		})
+
+		It("should include TLS fingerprint env when set", func() {
+			repo.Spec.Server.Enabled = true
+			repo.Status.TLSCertFingerprint = "ABC123"
+
+			envVars, _, _, _ := buildServerModeConfig(
+				backup, repo,
+				nil, nil, nil, nil,
+			)
+
+			found := false
+			for _, env := range envVars {
+				if env.Name == "KOPIA_TLS_FINGERPRINT" {
+					Expect(env.Value).To(Equal("ABC123"))
+					found = true
+				}
+			}
+			Expect(found).To(BeTrue(), "Expected KOPIA_TLS_FINGERPRINT env var")
+		})
 	})
 
 	Context("buildDirectModeConfig", func() {
@@ -237,6 +292,35 @@ var _ = Describe("CronJob Builder", func() {
 			}
 			Expect(mountPaths).To(ContainElement("/config/repository.config"))
 		})
+
+		It("should configure SFTP volumes and mounts for SFTP storage", func() {
+			repo.Spec.StorageType = backupv1alpha1.StorageTypeSFTP
+			repo.Spec.SFTPOptions = backupv1alpha1.KopiaRepositoryStorageSFTPSpec{
+				Host:              "sftp.example.com",
+				Port:              22,
+				Path:              "/backups",
+				CredentialsSecret: "sftp-creds",
+			}
+
+			_, _, volumeMounts, volumes := buildDirectModeConfig(
+				repo, "/cache/kopia",
+				nil, nil, nil, nil,
+			)
+
+			volNames := make([]string, 0)
+			for _, v := range volumes {
+				volNames = append(volNames, v.Name)
+			}
+			Expect(volNames).To(ContainElement("sftp-credentials"))
+			Expect(volNames).To(ContainElement("kopia-cache"))
+
+			mountPaths := make([]string, 0)
+			for _, vm := range volumeMounts {
+				mountPaths = append(mountPaths, vm.MountPath)
+			}
+			Expect(mountPaths).To(ContainElement("/sftp-creds"))
+			Expect(mountPaths).To(ContainElement("/cache/kopia"))
+		})
 	})
 
 	Context("naming.CronJobName", func() {
@@ -249,6 +333,38 @@ var _ = Describe("CronJob Builder", func() {
 			result := naming.CronJobName(longName)
 			Expect(result).To(HavePrefix("snapshot-"))
 			Expect(len(result)).To(BeNumerically("<=", 54))
+		})
+
+		It("should handle exactly 42 characters without truncation", func() {
+			// 42 chars: "snapshot-" (9) + 42 = 51, well under 54
+			name42 := "abcdefghijklmnopqrstuvwxyz0123456789abcdef"
+			Expect(name42).To(HaveLen(42))
+			result := naming.CronJobName(name42)
+			Expect(result).To(Equal("snapshot-" + name42))
+		})
+
+		It("should truncate at 43+ characters with last char appended", func() {
+			name43 := "abcdefghijklmnopqrstuvwxyz0123456789abcdefg"
+			Expect(name43).To(HaveLen(43))
+			result := naming.CronJobName(name43)
+			Expect(result).To(HavePrefix("snapshot-"))
+			Expect(len(result)).To(BeNumerically("<=", 54))
+			// Should end with the last character of the original name
+			Expect(result).To(HaveSuffix("g"))
+		})
+
+		It("should handle empty name", func() {
+			result := naming.CronJobName("")
+			Expect(result).To(Equal("snapshot-"))
+		})
+	})
+
+	Context("buildConfigMap edge cases", func() {
+		It("should error on unsupported storage type", func() {
+			repo.Spec.StorageType = "unknown"
+			_, err := buildConfigMap(backup, repo)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unsupported storage type"))
 		})
 	})
 })
