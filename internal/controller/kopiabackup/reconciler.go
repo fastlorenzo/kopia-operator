@@ -91,6 +91,10 @@ func (r *KopiaBackupReconciler) kopiaImage() string {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
+// Secrets RBAC is cluster-wide because the operator creates per-backup user credential
+// secrets with dynamic names. Kubebuilder markers don't support resourceNames restrictions
+// on dynamically named resources, so we grant full Secret CRUD and rely on controller
+// logic to only access secrets it owns.
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=backup.cloudinfra.be,resources=kopiarepositories,verbs=get;list;watch
