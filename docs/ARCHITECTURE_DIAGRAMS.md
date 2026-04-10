@@ -227,36 +227,68 @@ sequenceDiagram
 
 ## Security Architecture
 
+The security model is built around four layers, each enforced by different Kubernetes and Kopia mechanisms.
+
+### Network & Credential Flow
+
 ```mermaid
-graph TD
-    subgraph L1["Layer 1: Network Security"]
-        BackupPods["Backup Pods"] <-->|HTTPS/TLS| KopiaServer["Kopia Server"]
-        KopiaServer -->|"Only Server<br/>has access"| StorageBackend["Storage"]
+graph LR
+    subgraph appNS["Application Namespace"]
+        CronJob["Backup CronJob Pod"]
+        UserSecret["🔑 Secret<br/>‹backup›-kopia-creds"]
     end
 
-    subgraph L2["Layer 2: Authentication & Authorization"]
-        UserMgmt["**User Management** (on Kopia Server)<br/>- Each backup has unique username/password<br/>- Passwords auto-generated (32+ chars)<br/>- Stored in Kubernetes Secrets<br/>- Scoped to backup namespace"]
-        AccessCtrl["**Access Control**<br/>- Users can only access their own snapshots<br/>- Path-based authorization<br/>- Admin user (operator only) for user management"]
+    subgraph operatorNS["Operator Namespace"]
+        Operator["Kopia Operator"]
+        AdminSecret["🔑 Secret<br/>kopia-admin-secret"]
     end
 
-    subgraph L3["Layer 3: Credential Management"]
-        AdminCreds["**Admin Credentials** (Operator → Server)<br/>Secret: kopia-admin-secret<br/>- username: admin<br/>- password: strong-generated-password<br/>- Used only by operator for user management"]
-        StorageCreds["**Storage Credentials** (Server → Backend)<br/>Secret: kopia-repo-password<br/>- KOPIA_PASSWORD: repository-password<br/>- Mounted only to server pods<br/>- Not accessible to backup pods"]
-        UserCreds["**User Credentials** (Backup Pod → Server)<br/>Secret: backup-name-kopia-creds<br/>- username: namespace-pvcname<br/>- password: auto-generated-secure-password<br/>- Scoped to backup namespace"]
+    subgraph serverNS["Server Namespace"]
+        Server["Kopia Server"]
+        RepoSecret["🔑 Secret<br/>kopia-repo-password"]
     end
 
-    subgraph L4["Layer 4: Audit & Logging"]
-        ServerLogs["**Server Audit Logs:**<br/>✅ User authentication events<br/>✅ Snapshot creation/deletion<br/>✅ Failed login attempts<br/>✅ API access logs<br/>✅ User management operations"]
-        OperatorLogs["**Operator Audit Logs:**<br/>✅ Repository creation/deletion<br/>✅ Server deployment events<br/>✅ User creation/deletion<br/>✅ Configuration changes"]
-    end
+    Storage[("External Storage<br/>NFS / SFTP")]
 
-    L1 ~~~ L2 ~~~ L3 ~~~ L4
+    CronJob -->|"reads"| UserSecret
+    CronJob ==>|"HTTPS :51515<br/>user credentials"| Server
+
+    Operator -->|"reads"| AdminSecret
+    Operator ==>|"kubectl exec<br/>admin credentials"| Server
+
+    Server -->|"reads"| RepoSecret
+    Server ==>|"NFS/SFTP<br/>storage credentials"| Storage
+
+    CronJob -.-x|"❌ blocked"| Storage
+
+    style Storage fill:#f9f9f9,stroke:#999
+    linkStyle 6 stroke:red,stroke-dasharray:5
 ```
 
-> **Network Policies:**
-> - Backup pods → Server only
-> - Server → Storage only
-> - No direct backup pod → storage
+### Layer Details
+
+| Layer | Mechanism | What it protects |
+|-------|-----------|-----------------|
+| **Network** | Only the Kopia Server connects to storage. Backup pods only talk to the server over HTTPS/TLS. Network policies block direct pod→storage access. | Storage backend isolation |
+| **Authentication** | Each KopiaBackup gets a unique username + auto-generated 32+ char password, stored in a namespaced Secret. Server validates credentials on every API call. | Per-backup identity |
+| **Authorization** | Users can only access snapshots under their own path (`/data/‹ns›/‹app›/‹pvc›`). Admin user (operator-only) is the sole account that can manage users. | Snapshot isolation |
+| **Audit** | Server logs all auth events, snapshot operations, and failed login attempts. Operator logs resource lifecycle events (create/delete users, repos, servers). | Observability & compliance |
+
+### Credential Scoping
+
+```mermaid
+graph TD
+    subgraph secrets["Three separate credential domains"]
+        direction LR
+        A["🟢 **User Credentials**<br/>Per-backup · app namespace<br/>Backup pod → Server"]
+        B["🟡 **Admin Credentials**<br/>Per-repository · operator only<br/>Operator → Server"]
+        C["🔴 **Storage Credentials**<br/>Per-repository · server only<br/>Server → NFS/SFTP"]
+    end
+
+    A -.->|"scope: single backup"| scope1["CronJob Pod"]
+    B -.->|"scope: operator process"| scope2["Operator Pod"]
+    C -.->|"scope: server pod"| scope3["Kopia Server Pod"]
+```
 
 ## Deployment Topology Options
 
