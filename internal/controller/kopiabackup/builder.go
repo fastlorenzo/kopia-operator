@@ -451,7 +451,7 @@ func buildConfigMap(backup *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.Kop
 		Username:           repo.Spec.Username,
 		Description:        repo.Spec.Description,
 		EnableActions:      repo.Spec.EnableActions,
-		FormatBlobCacheDur: repo.Spec.FormatBlobCacheDuration,
+		FormatBlobCacheDur: repo.Spec.FormatBlobCacheDurationSeconds * 1e9, // convert seconds to nanoseconds
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")

@@ -274,9 +274,9 @@ type KopiaRepositorySpec struct {
 	// +kubebuilder:validation:MinLength=1
 	PasswordSecretName string `json:"passwordSecretName"`
 
-	// Duration (in nanoseconds) to cache format blobs.
-	// +kubebuilder:default:=900000000000
-	FormatBlobCacheDuration int64 `json:"formatBlobCacheDuration,omitempty"`
+	// Duration (in seconds) to cache format blobs.
+	// +kubebuilder:default:=900
+	FormatBlobCacheDurationSeconds int64 `json:"formatBlobCacheDurationSeconds,omitempty"`
 
 	// Caching options for the repository.
 	// +kubebuilder:default:={}

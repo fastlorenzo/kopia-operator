@@ -69,7 +69,7 @@ type KopiaRepositorySpec struct {
     PermissiveCacheLoading     bool    // Allow loading stale cache
     EnableActions              bool    // Enable Kopia actions
     DefaultSchedule            string  // Default cron schedule for backups
-    FormatBlobCacheDuration    int64   // Cache duration for format blobs
+    FormatBlobCacheDurationSeconds int64  // Cache duration for format blobs (seconds)
 
     // Caching options
     Caching                    KopiaRepositoryCachingSpec

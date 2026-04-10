@@ -145,9 +145,9 @@ spec:
                 required:
                 - path
                 type: object
-              formatBlobCacheDuration:
-                default: 900000000000
-                description: Duration (in nanoseconds) to cache format blobs.
+              formatBlobCacheDurationSeconds:
+                default: 900
+                description: Duration (in seconds) to cache format blobs.
                 format: int64
                 type: integer
               hostname:
