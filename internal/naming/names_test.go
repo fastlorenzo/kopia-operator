@@ -25,7 +25,7 @@ func TestCronJobName(t *testing.T) {
 		{
 			name:     "empty name",
 			pvcName:  "",
-			expected: "snapshot-",
+			expected: "snapshot-unknown",
 			maxLen:   54,
 		},
 	}

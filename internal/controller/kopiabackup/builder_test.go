@@ -356,7 +356,7 @@ var _ = Describe("CronJob Builder", func() {
 
 		It("should handle empty name", func() {
 			result := naming.CronJobName("")
-			Expect(result).To(Equal("snapshot-"))
+			Expect(result).To(Equal("snapshot-unknown"))
 		})
 	})
 

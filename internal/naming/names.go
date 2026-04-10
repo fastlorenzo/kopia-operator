@@ -5,6 +5,9 @@ import "fmt"
 // CronJobName generates the CronJob name from a PVC name.
 // Name format: snapshot-<first 42 chars>-<last char> if name > 42 chars.
 func CronJobName(pvcName string) string {
+	if pvcName == "" {
+		return "snapshot-unknown"
+	}
 	if len(pvcName) > 42 {
 		return "snapshot-" + pvcName[:42] + "-" + string(pvcName[len(pvcName)-1])
 	}
