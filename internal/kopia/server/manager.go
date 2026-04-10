@@ -37,6 +37,13 @@ type KopiaServerManager struct {
 	Scheme *runtime.Scheme
 }
 
+// shellQuote wraps a value in single quotes with proper escaping for safe
+// interpolation into shell scripts. Single quotes inside the value are escaped
+// using the standard shell idiom: end quote, escaped quote, restart quote.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // NewKopiaServerManager creates a new KopiaServerManager.
 func NewKopiaServerManager(client client.Client, scheme *runtime.Scheme) *KopiaServerManager {
 	return &KopiaServerManager{
@@ -408,10 +415,10 @@ func (m *KopiaServerManager) writeFilesystemServerScript(b *strings.Builder, rep
 
 	b.WriteString("set -e\necho \"Connecting to repository...\"\n")
 	fmt.Fprintf(b, "kopia repository connect filesystem --path=/repository --override-hostname=%s --override-username=%s%s || {\n",
-		repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+		shellQuote(repo.Spec.Hostname), shellQuote(repo.Spec.Username), cacheFlags)
 	b.WriteString("  echo \"Repository connection failed, attempting to create...\"\n")
 	fmt.Fprintf(b, "  kopia repository create filesystem --path=/repository --override-hostname=%s --override-username=%s%s\n",
-		repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+		shellQuote(repo.Spec.Hostname), shellQuote(repo.Spec.Username), cacheFlags)
 	b.WriteString("}\n")
 }
 
@@ -428,22 +435,22 @@ func (m *KopiaServerManager) writeSFTPServerScript(b *strings.Builder, repo *bac
 
 	// Build the connect command
 	baseSFTPCmd := fmt.Sprintf("kopia repository connect sftp --host=%s --port=%d --path=%s",
-		repo.Spec.SFTPOptions.Host, port, repo.Spec.SFTPOptions.Path)
+		shellQuote(repo.Spec.SFTPOptions.Host), port, shellQuote(repo.Spec.SFTPOptions.Path))
 	fmt.Fprintf(b, "SFTP_CMD=\"%s --username=$SFTP_USER\"\n", baseSFTPCmd)
 	m.writeSFTPAuthFlags(b, repo, "SFTP_CMD")
 	fmt.Fprintf(b, "SFTP_CMD=\"$SFTP_CMD --override-hostname=%s --override-username=%s%s\"\n",
-		repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+		shellQuote(repo.Spec.Hostname), shellQuote(repo.Spec.Username), cacheFlags)
 	b.WriteString("eval \"$SFTP_CMD\"\n")
 
 	// Build the create fallback
 	b.WriteString("if [ $? -ne 0 ]; then\n")
 	b.WriteString("  echo \"Repository connection failed, attempting to create...\"\n")
 	sftpCreateCmd := fmt.Sprintf("kopia repository create sftp --host=%s --port=%d --path=%s",
-		repo.Spec.SFTPOptions.Host, port, repo.Spec.SFTPOptions.Path)
+		shellQuote(repo.Spec.SFTPOptions.Host), port, shellQuote(repo.Spec.SFTPOptions.Path))
 	fmt.Fprintf(b, "  SFTP_CREATE_CMD=\"%s --username=$SFTP_USER\"\n", sftpCreateCmd)
 	m.writeSFTPAuthFlags(b, repo, "SFTP_CREATE_CMD")
 	fmt.Fprintf(b, "  SFTP_CREATE_CMD=\"$SFTP_CREATE_CMD --override-hostname=%s --override-username=%s%s\"\n",
-		repo.Spec.Hostname, repo.Spec.Username, cacheFlags)
+		shellQuote(repo.Spec.Hostname), shellQuote(repo.Spec.Username), cacheFlags)
 	b.WriteString("  eval \"$SFTP_CREATE_CMD\"\n")
 	b.WriteString("  if [ $? -eq 0 ]; then\n")
 	b.WriteString("    echo \"Repository created successfully, reconnecting...\"\n")
@@ -477,7 +484,7 @@ fi
 `, cmdVar, cmdVar, cmdVar, cmdVar)
 
 	if repo.Spec.SFTPOptions.KnownHostsData != "" {
-		fmt.Fprintf(b, "echo \"%s\" > /tmp/known_hosts\n", repo.Spec.SFTPOptions.KnownHostsData)
+		fmt.Fprintf(b, "cat > /tmp/known_hosts <<'KNOWN_HOSTS_EOF'\n%s\nKNOWN_HOSTS_EOF\n", repo.Spec.SFTPOptions.KnownHostsData)
 		fmt.Fprintf(b, "%s=\"$%s --known-hosts=/tmp/known_hosts\"\n", cmdVar, cmdVar)
 	}
 	if repo.Spec.SFTPOptions.ExternalSSH {
@@ -485,13 +492,14 @@ fi
 		if repo.Spec.SFTPOptions.SSHCommand != "" {
 			sshCmd = repo.Spec.SFTPOptions.SSHCommand
 		}
-		fmt.Fprintf(b, "%s=\"$%s --external-ssh --ssh-command=%s\"\n", cmdVar, cmdVar, sshCmd)
+		fmt.Fprintf(b, "%s=\"$%s --external-ssh --ssh-command=%s\"\n", cmdVar, cmdVar, shellQuote(sshCmd))
 	}
 }
 
 // writeAdminUserSetup writes the admin user creation/update script fragment.
 func (m *KopiaServerManager) writeAdminUserSetup(b *strings.Builder, repo *backupv1alpha1.KopiaRepository) {
-	fmt.Fprintf(b, `ADMIN_USER="%s@%s"
+	adminUser := shellQuote(fmt.Sprintf("%s@%s", repo.Spec.Username, repo.Spec.Hostname))
+	fmt.Fprintf(b, `ADMIN_USER=%s
 echo "Checking admin user: $ADMIN_USER"
 set +e
 kopia server user list 2>/dev/null | grep -q "$ADMIN_USER"
@@ -504,7 +512,7 @@ else
   echo "Updating admin user password: $ADMIN_USER"
   kopia server user set "$ADMIN_USER" --user-password="${KOPIA_PASSWORD}"
 fi
-`, repo.Spec.Username, repo.Spec.Hostname)
+`, adminUser)
 }
 
 // writeServerStartCommand writes the kopia server start command.
@@ -516,7 +524,7 @@ func (m *KopiaServerManager) writeServerStartCommand(b *strings.Builder, repo *b
 	b.WriteString("  --server-control-username=admin \\\n")
 	b.WriteString("  --server-control-password=\"${KOPIA_SERVER_PASSWORD}\"")
 	for _, arg := range repo.Spec.Server.ExtraArgs {
-		fmt.Fprintf(b, " \\\n  %s", arg)
+		fmt.Fprintf(b, " \\\n  %s", shellQuote(arg))
 	}
 	b.WriteString("\n")
 }
