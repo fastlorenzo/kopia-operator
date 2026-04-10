@@ -175,7 +175,7 @@ spec:
               permissiveCacheLoading:
                 description: Allow loading from cache even when stale.
                 type: boolean
-              readonly:
+              readOnly:
                 description: Make the repository read-only.
                 type: boolean
               server:

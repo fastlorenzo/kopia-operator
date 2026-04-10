@@ -31,3 +31,4 @@ go.work
 test/data/*
 output-dir/
 CODE_REVIEW_TASKS.md
+CODE_REVIEW_TASKS_V2.md

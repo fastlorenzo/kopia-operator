@@ -252,7 +252,7 @@ type KopiaRepositorySpec struct {
 
 	// Make the repository read-only.
 	// +optional
-	ReadOnly bool `json:"readonly,omitempty"`
+	ReadOnly bool `json:"readOnly,omitempty"`
 
 	// Allow loading from cache even when stale.
 	// +optional
