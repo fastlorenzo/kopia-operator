@@ -42,6 +42,7 @@ import (
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 	"github.com/fastlorenzo/kopia-operator/internal/kopia"
+	kopiaMetrics "github.com/fastlorenzo/kopia-operator/internal/metrics"
 	"github.com/fastlorenzo/kopia-operator/internal/naming"
 )
 
@@ -96,6 +97,15 @@ func (r *KopiaBackupReconciler) kopiaImage() string {
 
 // Reconcile orchestrates the backup reconciliation through discrete phases.
 func (r *KopiaBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	result, err := r.reconcile(ctx, req)
+	if err != nil {
+		kopiaMetrics.ReconcileErrors.WithLabelValues("kopiabackup").Inc()
+	}
+	return result, err
+}
+
+// reconcile contains the actual reconciliation logic.
+func (r *KopiaBackupReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var kBackup backupv1alpha1.KopiaBackup
 	if err := r.Get(ctx, req.NamespacedName, &kBackup); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)

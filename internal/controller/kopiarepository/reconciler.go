@@ -33,6 +33,7 @@ import (
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 	"github.com/fastlorenzo/kopia-operator/internal/kopia"
+	kopiaMetrics "github.com/fastlorenzo/kopia-operator/internal/metrics"
 	"github.com/fastlorenzo/kopia-operator/internal/naming"
 )
 
@@ -53,6 +54,14 @@ type KopiaRepositoryReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
 func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	result, err := r.reconcile(ctx, req)
+	if err != nil {
+		kopiaMetrics.ReconcileErrors.WithLabelValues("kopiarepository").Inc()
+	}
+	return result, err
+}
+
+func (r *KopiaRepositoryReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	var repo backupv1alpha1.KopiaRepository
@@ -151,6 +160,13 @@ func (r *KopiaRepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		repo.Status.ServerURL = r.ServerManager.GetServerURL(&repo)
 		repo.Status.ServerDeployment = naming.ServerDeploymentName(repo.Name)
 		repo.Status.ServerService = naming.ServerServiceName(repo.Name)
+
+		// Update server readiness metric
+		readyVal := float64(0)
+		if ready {
+			readyVal = 1
+		}
+		kopiaMetrics.ServerReady.WithLabelValues(repo.Name, repo.Namespace).Set(readyVal)
 
 		if ready {
 			meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{

@@ -154,6 +154,17 @@ make test
 - [Server Passwords](docs/server-passwords.md)
 - [Examples](docs/EXAMPLES.md)
 
+## Metrics
+
+The operator exposes custom Prometheus metrics on the `/metrics` endpoint (default port `:8443`):
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `kopia_operator_backups_per_repository` | Gauge | `repository`, `namespace` | Number of KopiaBackup resources per repository |
+| `kopia_operator_last_successful_backup_timestamp` | Gauge | `backup`, `namespace`, `pvc` | Unix timestamp of the last successful backup |
+| `kopia_operator_reconcile_errors_total` | Counter | `controller` | Total number of reconcile errors |
+| `kopia_operator_server_ready` | Gauge | `repository`, `namespace` | Whether the Kopia Server is ready (1=ready, 0=not ready) |
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

@@ -40,6 +40,7 @@ import (
 	"github.com/fastlorenzo/kopia-operator/internal/controller/pvcwatcher"
 	"github.com/fastlorenzo/kopia-operator/internal/kopia/server"
 	"github.com/fastlorenzo/kopia-operator/internal/kopia/user"
+	_ "github.com/fastlorenzo/kopia-operator/internal/metrics" // Register custom Prometheus metrics
 	//+kubebuilder:scaffold:imports
 )
 
