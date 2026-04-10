@@ -60,6 +60,15 @@ var _ = Describe("User Manager Helpers", func() {
 			Expect(script).NotTo(ContainSubstring("p'a`ss$word"))
 			Expect(cmd[5]).To(Equal("p'a`ss$word"))
 		})
+
+		It("should be idempotent — the script checks if the user already exists before creating", func() {
+			cmd := buildCreateUserCommand("ns-pvc@host", "secret123", "fp456")
+			script := cmd[2]
+			// The script greps for the user first, and uses 'set' to update if found
+			Expect(script).To(ContainSubstring("grep"))
+			Expect(script).To(ContainSubstring("server user set"))
+			Expect(script).To(ContainSubstring("server user add"))
+		})
 	})
 
 	Context("buildDeleteUserCommand", func() {

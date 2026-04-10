@@ -109,7 +109,7 @@ func (m *KopiaUserManager) EnsureUser(
 				logger.Info("Server not ready, will requeue", "error", err.Error())
 				return "", err
 			}
-			logger.Error(err, "Failed to create user on Kopia server")
+			return "", fmt.Errorf("failed to create user on Kopia server: %w", err)
 		}
 
 		return secretName, nil
@@ -125,7 +125,7 @@ func (m *KopiaUserManager) EnsureUser(
 			logger.Info("Server not ready, will requeue", "error", err.Error())
 			return "", err
 		}
-		logger.Error(err, "Failed to ensure user on Kopia server")
+		return "", fmt.Errorf("failed to ensure user on Kopia server: %w", err)
 	}
 
 	return secretName, nil

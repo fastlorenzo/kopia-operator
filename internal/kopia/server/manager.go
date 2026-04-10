@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -343,35 +344,35 @@ func (m *KopiaServerManager) constructStorageVolume(repo *backupv1alpha1.KopiaRe
 
 // BuildCacheFlags generates Kopia cache configuration flags from repository spec.
 func BuildCacheFlags(caching backupv1alpha1.KopiaRepositoryCachingSpec) string {
-	flags := ""
+	var b strings.Builder
 	if caching.CacheDirectory != "" {
-		flags += fmt.Sprintf(" --cache-directory=%s", caching.CacheDirectory)
+		fmt.Fprintf(&b, " --cache-directory=%s", caching.CacheDirectory)
 	}
 	if caching.ContentCacheSizeBytes > 0 {
-		flags += fmt.Sprintf(" --content-cache-size-mb=%d", caching.ContentCacheSizeBytes/(1024*1024))
+		fmt.Fprintf(&b, " --content-cache-size-mb=%d", caching.ContentCacheSizeBytes/(1024*1024))
 	}
 	if caching.ContentCacheSizeLimitBytes > 0 {
-		flags += fmt.Sprintf(" --content-cache-size-limit-mb=%d", caching.ContentCacheSizeLimitBytes/(1024*1024))
+		fmt.Fprintf(&b, " --content-cache-size-limit-mb=%d", caching.ContentCacheSizeLimitBytes/(1024*1024))
 	}
 	if caching.MetadataCacheSizeBytes > 0 {
-		flags += fmt.Sprintf(" --metadata-cache-size-mb=%d", caching.MetadataCacheSizeBytes/(1024*1024))
+		fmt.Fprintf(&b, " --metadata-cache-size-mb=%d", caching.MetadataCacheSizeBytes/(1024*1024))
 	}
 	if caching.MetadataCacheSizeLimitBytes > 0 {
-		flags += fmt.Sprintf(" --metadata-cache-size-limit-mb=%d", caching.MetadataCacheSizeLimitBytes/(1024*1024))
+		fmt.Fprintf(&b, " --metadata-cache-size-limit-mb=%d", caching.MetadataCacheSizeLimitBytes/(1024*1024))
 	}
 	if caching.MaxListCacheDuration > 0 {
-		flags += fmt.Sprintf(" --max-list-cache-duration=%ds", caching.MaxListCacheDuration)
+		fmt.Fprintf(&b, " --max-list-cache-duration=%ds", caching.MaxListCacheDuration)
 	}
 	if caching.MinMetadataSweepAge > 0 {
-		flags += fmt.Sprintf(" --min-metadata-sweep-age=%ds", caching.MinMetadataSweepAge)
+		fmt.Fprintf(&b, " --min-metadata-sweep-age=%ds", caching.MinMetadataSweepAge)
 	}
 	if caching.MinContentSweepAge > 0 {
-		flags += fmt.Sprintf(" --min-content-sweep-age=%ds", caching.MinContentSweepAge)
+		fmt.Fprintf(&b, " --min-content-sweep-age=%ds", caching.MinContentSweepAge)
 	}
 	if caching.MinIndexSweepAge > 0 {
-		flags += fmt.Sprintf(" --min-index-sweep-age=%ds", caching.MinIndexSweepAge)
+		fmt.Fprintf(&b, " --min-index-sweep-age=%ds", caching.MinIndexSweepAge)
 	}
-	return flags
+	return b.String()
 }
 
 // constructServerCommand builds the command to start the Kopia Server.
