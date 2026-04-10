@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	namespace    = "kopia-operator-system"
+	namespace    = "kopia-operator"
 	testNS       = "kopia-e2e-test"
 	projectimage = "kopia-operator:e2e-test"
 )
@@ -62,6 +62,16 @@ var _ = Describe("Kopia Operator E2E", Ordered, func() {
 
 		By("deploying the controller-manager")
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectimage))
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("disabling webhooks (no cert-manager in kind)")
+		cmd = exec.Command("kubectl", "set", "env",
+			"deployment/kopia-operator-controller-manager",
+			"-n", namespace,
+			"ENABLE_WEBHOOKS=false",
+			"-c", "manager",
+		)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 
