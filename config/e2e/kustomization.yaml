@@ -1,0 +1,16 @@
+# Kustomize overlay for e2e testing (kind clusters).
+# Overrides imagePullPolicy to IfNotPresent since images are loaded
+# directly into kind nodes rather than pulled from a registry.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../default
+patches:
+  - target:
+      kind: Deployment
+      name: controller-manager
+      namespace: system
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent

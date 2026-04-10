@@ -61,7 +61,7 @@ var _ = Describe("Kopia Operator E2E", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectimage))
+		cmd = exec.Command("make", "deploy-e2e", fmt.Sprintf("IMG=%s", projectimage))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 
