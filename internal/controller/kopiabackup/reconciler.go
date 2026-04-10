@@ -157,6 +157,7 @@ func (r *KopiaBackupReconciler) handleFinalizer(ctx context.Context, backup *bac
 						log.Error(delErr, "Failed to delete server user during finalization")
 						r.Recorder.Event(backup, corev1.EventTypeWarning, "FinalizerFailed",
 							fmt.Sprintf("Failed to delete server user: %v", delErr))
+						return true, fmt.Errorf("finalizer cleanup failed, will retry: %w", delErr)
 					}
 				}
 			}
