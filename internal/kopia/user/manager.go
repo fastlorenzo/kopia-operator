@@ -123,10 +123,16 @@ func (m *KopiaUserManager) EnsureUser(
 	}
 
 	logger.Info("User credentials secret already exists", "secret", secretName)
-	existingUsername := string(secret.Data["KOPIA_SERVER_USERNAME"])
-	existingPassword := string(secret.Data["KOPIA_SERVER_PASSWORD"])
+	existingUsername, ok := secret.Data["KOPIA_SERVER_USERNAME"]
+	if !ok {
+		return "", fmt.Errorf("secret %q missing required key KOPIA_SERVER_USERNAME", secretName)
+	}
+	existingPassword, ok := secret.Data["KOPIA_SERVER_PASSWORD"]
+	if !ok {
+		return "", fmt.Errorf("secret %q missing required key KOPIA_SERVER_PASSWORD", secretName)
+	}
 
-	if err := m.createUserOnServer(ctx, repo, existingUsername, existingPassword); err != nil {
+	if err := m.createUserOnServer(ctx, repo, string(existingUsername), string(existingPassword)); err != nil {
 		var serverNotReady *kopia.ServerNotReadyError
 		if errors.As(err, &serverNotReady) {
 			logger.Info("Server not ready, will requeue", "error", err.Error())
