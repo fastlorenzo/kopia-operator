@@ -508,8 +508,13 @@ if [ -z "$SFTP_USER" ]; then echo "ERROR: SFTP username not found in secret"; ex
 
 // writeSFTPAuthFlags appends SFTP authentication flags to the given command variable.
 func (m *KopiaServerManager) writeSFTPAuthFlags(b *strings.Builder, repo *backupv1alpha1.KopiaRepository, cmdVar string) {
+	// Register cleanup trap for temp files before creating them.
+	b.WriteString("CLEANUP_FILES=\"\"\n")
+	b.WriteString("trap 'rm -f $CLEANUP_FILES' EXIT\n")
+
 	fmt.Fprintf(b, `if [ -n "$SFTP_KEY" ]; then
   SSH_KEY_FILE=$(mktemp /tmp/ssh_key.XXXXXX) && echo "$SFTP_KEY" > "$SSH_KEY_FILE" && chmod 600 "$SSH_KEY_FILE"
+  CLEANUP_FILES="$CLEANUP_FILES $SSH_KEY_FILE"
   %s="$%s --keyfile=$SSH_KEY_FILE"
 elif [ -n "$SFTP_PASSWORD" ]; then
   %s="$%s --sftp-password=$SFTP_PASSWORD"
@@ -520,6 +525,7 @@ fi
 
 	if repo.Spec.SFTPOptions.KnownHostsData != "" {
 		fmt.Fprintf(b, "cat > /tmp/known_hosts <<'KNOWN_HOSTS_EOF'\n%s\nKNOWN_HOSTS_EOF\n", repo.Spec.SFTPOptions.KnownHostsData)
+		b.WriteString("CLEANUP_FILES=\"$CLEANUP_FILES /tmp/known_hosts\"\n")
 		fmt.Fprintf(b, "%s=\"$%s --known-hosts=/tmp/known_hosts\"\n", cmdVar, cmdVar)
 	}
 	if repo.Spec.SFTPOptions.ExternalSSH {
