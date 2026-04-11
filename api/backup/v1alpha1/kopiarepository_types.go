@@ -137,16 +137,22 @@ type KopiaRepositoryStorageFileSystemSpec struct {
 	Path string `json:"path"`
 
 	// FileMode for files in the repository.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=511
 	// +optional
 	FileMode uint32 `json:"fileMode,omitempty"`
 	// DirectoryMode for directories in the repository.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=511
 	// +optional
 	DirectoryMode uint32 `json:"dirMode,omitempty"`
 
 	// UID of files in the repository.
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	FileUID int `json:"uid,omitempty"`
 	// GID of files in the repository.
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	FileGID int `json:"gid,omitempty"`
 
@@ -171,7 +177,7 @@ type KopiaRepositoryStorageSFTPSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	// +optional
-	Port int `json:"port,omitempty"`
+	Port int32 `json:"port,omitempty"`
 
 	// Known hosts data for SSH host key verification.
 	// +optional

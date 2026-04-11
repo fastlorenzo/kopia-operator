@@ -423,7 +423,7 @@ type filesystemStorageConfig struct {
 type sftpStorageConfig struct {
 	Path           string `json:"path"`
 	Host           string `json:"host"`
-	Port           int    `json:"port,omitempty"`
+	Port           int32  `json:"port,omitempty"`
 	KnownHostsData string `json:"knownHostsData,omitempty"`
 	ExternalSSH    bool   `json:"externalSSH,omitempty"`
 	SSHCommand     string `json:"sshCommand,omitempty"`

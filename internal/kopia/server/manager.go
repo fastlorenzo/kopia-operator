@@ -460,7 +460,7 @@ func (m *KopiaServerManager) writeFilesystemServerScript(b *strings.Builder, rep
 // writeSFTPServerScript writes the SFTP-mode repository connect/create script.
 func (m *KopiaServerManager) writeSFTPServerScript(b *strings.Builder, repo *backupv1alpha1.KopiaRepository) {
 	cacheFlags := BuildCacheFlags(repo.Spec.Caching)
-	port := 22
+	port := int32(22)
 	if repo.Spec.SFTPOptions.Port > 0 {
 		port = repo.Spec.SFTPOptions.Port
 	}

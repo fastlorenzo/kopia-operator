@@ -138,13 +138,18 @@ spec:
                   dirMode:
                     description: DirectoryMode for directories in the repository.
                     format: int32
+                    maximum: 511
+                    minimum: 0
                     type: integer
                   fileMode:
                     description: FileMode for files in the repository.
                     format: int32
+                    maximum: 511
+                    minimum: 0
                     type: integer
                   gid:
                     description: GID of files in the repository.
+                    minimum: 0
                     type: integer
                   nfsPath:
                     description: NFS export path for the repository.
@@ -157,6 +162,7 @@ spec:
                     type: string
                   uid:
                     description: UID of files in the repository.
+                    minimum: 0
                     type: integer
                 required:
                 - path
@@ -353,6 +359,7 @@ spec:
                   port:
                     default: 22
                     description: SFTP server port.
+                    format: int32
                     maximum: 65535
                     minimum: 1
                     type: integer
