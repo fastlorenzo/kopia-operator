@@ -33,6 +33,25 @@ jobs:
       - name: Run tests
         run: make test
 
+      - name: Upload coverage report
+        if: github.event_name == 'pull_request'
+        uses: codecov/codecov-action@v5
+        with:
+          files: cover.out
+          fail_ci_if_error: false
+
+      - name: Run security scan (gosec)
+        uses: securego/gosec@master
+        with:
+          args: ./...
+
+      - name: Run container security scan (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
