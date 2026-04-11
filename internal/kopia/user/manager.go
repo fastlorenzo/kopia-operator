@@ -84,7 +84,7 @@ func (m *KopiaUserManager) EnsureUser(
 			return "", fmt.Errorf("failed to get user credentials secret: %w", err)
 		}
 
-		password, err := generateSecurePassword(32)
+		password, err := generateSecurePassword()
 		if err != nil {
 			return "", fmt.Errorf("failed to generate password: %w", err)
 		}
@@ -184,15 +184,17 @@ func (m *KopiaUserManager) DeleteUser(
 	return m.Client.Delete(ctx, secret)
 }
 
+const securePasswordLength = 32
+
 // generateSecurePassword generates a cryptographically secure random password.
-func generateSecurePassword(length int) (string, error) {
+func generateSecurePassword() (string, error) {
 	// base64 encodes 3 bytes into 4 characters; calculate bytes needed for desired length.
-	numBytes := (length*3 + 3) / 4
+	numBytes := (securePasswordLength*3 + 3) / 4
 	b := make([]byte, numBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("failed to generate random bytes: %w", err)
 	}
-	return base64.URLEncoding.EncodeToString(b)[:length], nil
+	return base64.URLEncoding.EncodeToString(b)[:securePasswordLength], nil
 }
 
 // createUserOnServer creates a user on the Kopia server via kubectl exec.

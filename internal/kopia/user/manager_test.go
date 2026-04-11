@@ -50,16 +50,17 @@ func testBackup(ns, name, pvc string) *backupv1alpha1.KopiaBackup {
 	}
 }
 
-func testRepo(ns, name string) *backupv1alpha1.KopiaRepository {
+func testRepo(ns string) *backupv1alpha1.KopiaRepository {
 	return &backupv1alpha1.KopiaRepository{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: "test-repo", Namespace: ns},
 		Spec:       backupv1alpha1.KopiaRepositorySpec{Hostname: "kopia-host"},
 		Status:     backupv1alpha1.KopiaRepositoryStatus{TLSCertFingerprint: "abc123"},
 	}
 }
 
 // createServerPod creates a pod with matching labels so getServerPodName finds it.
-func createServerPod(ctx context.Context, ns, repoName string) {
+func createServerPod(ctx context.Context, ns string) {
+	const repoName = "test-repo"
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      naming.ServerDeploymentName(repoName),
@@ -87,14 +88,14 @@ func createServerPod(ctx context.Context, ns, repoName string) {
 var _ = Describe("User Manager Helpers", func() {
 	Context("generateSecurePassword", func() {
 		It("should generate a password of the correct length", func() {
-			pw, err := generateSecurePassword(32)
+			pw, err := generateSecurePassword()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(pw).To(HaveLen(32))
 		})
 
 		It("should generate different passwords each time", func() {
-			pw1, _ := generateSecurePassword(32)
-			pw2, _ := generateSecurePassword(32)
+			pw1, _ := generateSecurePassword()
+			pw2, _ := generateSecurePassword()
 			Expect(pw1).NotTo(Equal(pw2))
 		})
 	})
@@ -189,8 +190,8 @@ var _ = Describe("EnsureUser", func() {
 		mgr := newTestManager(executor)
 
 		backup := testBackup(ns, "b1", "my-pvc")
-		repo := testRepo(ns, "test-repo")
-		createServerPod(ctx, ns, "test-repo")
+		repo := testRepo(ns)
+		createServerPod(ctx, ns)
 
 		secretName, err := mgr.EnsureUser(ctx, backup, repo)
 		Expect(err).NotTo(HaveOccurred())
@@ -210,8 +211,8 @@ var _ = Describe("EnsureUser", func() {
 		mgr := newTestManager(successExecutor)
 
 		backup := testBackup(ns, "b2", "existing-pvc")
-		repo := testRepo(ns, "test-repo")
-		createServerPod(ctx, ns, "test-repo")
+		repo := testRepo(ns)
+		createServerPod(ctx, ns)
 
 		// Pre-create secret
 		secret := &corev1.Secret{
@@ -235,7 +236,7 @@ var _ = Describe("EnsureUser", func() {
 		mgr := newTestManager(successExecutor)
 
 		backup := testBackup(ns, "b3", "pvc3")
-		repo := testRepo(ns, "test-repo")
+		repo := testRepo(ns)
 		// No server pod created
 
 		_, err := mgr.EnsureUser(ctx, backup, repo)
@@ -249,8 +250,8 @@ var _ = Describe("EnsureUser", func() {
 		mgr := newTestManager(executor)
 
 		backup := testBackup(ns, "b4", "pvc4")
-		repo := testRepo(ns, "test-repo")
-		createServerPod(ctx, ns, "test-repo")
+		repo := testRepo(ns)
+		createServerPod(ctx, ns)
 
 		_, err := mgr.EnsureUser(ctx, backup, repo)
 		Expect(err).To(HaveOccurred())
@@ -263,8 +264,8 @@ var _ = Describe("EnsureUser", func() {
 		mgr := newTestManager(executor)
 
 		backup := testBackup(ns, "b5", "pvc5")
-		repo := testRepo(ns, "test-repo")
-		createServerPod(ctx, ns, "test-repo")
+		repo := testRepo(ns)
+		createServerPod(ctx, ns)
 
 		_, err := mgr.EnsureUser(ctx, backup, repo)
 		Expect(err).To(HaveOccurred())
@@ -293,8 +294,8 @@ var _ = Describe("DeleteUser", func() {
 		mgr := newTestManager(executor)
 
 		backup := testBackup(ns, "b1", "del-pvc")
-		repo := testRepo(ns, "test-repo")
-		createServerPod(ctx, ns, "test-repo")
+		repo := testRepo(ns)
+		createServerPod(ctx, ns)
 
 		// Pre-create the secret
 		secret := &corev1.Secret{
@@ -322,8 +323,8 @@ var _ = Describe("DeleteUser", func() {
 		mgr := newTestManager(successExecutor)
 
 		backup := testBackup(ns, "b2", "no-secret-pvc")
-		repo := testRepo(ns, "test-repo")
-		createServerPod(ctx, ns, "test-repo")
+		repo := testRepo(ns)
+		createServerPod(ctx, ns)
 
 		err := mgr.DeleteUser(ctx, backup, repo)
 		Expect(err).NotTo(HaveOccurred())
