@@ -7,7 +7,7 @@ metadata:
   name: kopiabackup-sample
 spec:
   # Reference to the KopiaRepository where backups will be stored
-  repositoryName: kopiarepository-sample
+  repository: kopiarepository-sample
 
   # PVC to backup
   pvcName: my-app-data
