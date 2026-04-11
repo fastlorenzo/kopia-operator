@@ -185,23 +185,7 @@ func buildCronJob(
 									Type: corev1.SeccompProfileTypeRuntimeDefault,
 								},
 							},
-							Affinity: &corev1.Affinity{
-								NodeAffinity: &corev1.NodeAffinity{
-									RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-										NodeSelectorTerms: []corev1.NodeSelectorTerm{
-											{
-												MatchExpressions: []corev1.NodeSelectorRequirement{
-													{
-														Key:      "kubernetes.io/hostname",
-														Operator: corev1.NodeSelectorOpIn,
-														Values:   []string{nodeName},
-													},
-												},
-											},
-										},
-									},
-								},
-							},
+							Affinity:       buildNodeAffinity(nodeName),
 							InitContainers: initContainers,
 							Containers: []corev1.Container{
 								{
@@ -487,4 +471,29 @@ func buildConfigMap(backup *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.Kop
 			"repository.config": string(data),
 		},
 	}, nil
+}
+
+// buildNodeAffinity returns a node affinity that pins pods to the given node,
+// or nil when nodeName is empty (no pod currently uses the PVC).
+func buildNodeAffinity(nodeName string) *corev1.Affinity {
+	if nodeName == "" {
+		return nil
+	}
+	return &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{
+					{
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{
+								Key:      "kubernetes.io/hostname",
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{nodeName},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }

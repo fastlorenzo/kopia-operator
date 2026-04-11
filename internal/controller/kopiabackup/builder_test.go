@@ -133,11 +133,9 @@ var _ = Describe("CronJob Builder", func() {
 			Expect(labels["backup.cloudinfra.be/node-name"]).To(Equal(""))
 		})
 
-		It("should set node affinity with empty nodeName", func() {
+		It("should omit node affinity with empty nodeName", func() {
 			cj := buildCronJob(backup, "snapshot-my-pvc", "", "my-app", repo, "")
-			terms := cj.Spec.JobTemplate.Spec.Template.Spec.Affinity.NodeAffinity.
-				RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
-			Expect(terms[0].MatchExpressions[0].Values).To(Equal([]string{""}))
+			Expect(cj.Spec.JobTemplate.Spec.Template.Spec.Affinity).To(BeNil())
 		})
 	})
 

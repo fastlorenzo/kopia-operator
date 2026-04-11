@@ -274,18 +274,14 @@ func (r *KopiaBackupReconciler) reconcileBackupResources(
 	repo *backupv1alpha1.KopiaRepository,
 ) (ctrl.Result, error) {
 	nodeName, appName, podName := r.findPodUsingPVC(ctx, backup)
-	if nodeName == "" {
-		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-			backupv1alpha1.ReasonNoPodFound, "No running pod found with the PVC mounted")
-		// Requeue: no watch on all pods; this is a genuinely transient condition.
-		return ctrl.Result{RequeueAfter: requeueDelay}, nil
-	}
 
 	backup.Status.NodeName = nodeName
 
 	cronJobName := naming.CronJobName(backup.Spec.PVCName)
 	backup.Status.CronJobName = cronJobName
 
+	// Always reconcile the CronJob so that schedule/config changes are applied
+	// even when the consumer pod is temporarily absent.
 	if err := r.reconcileCronJob(ctx, backup, cronJobName, nodeName, appName, repo); err != nil {
 		r.setCondition(backup, backupv1alpha1.ConditionTypeCronJobCreated, metav1.ConditionFalse,
 			backupv1alpha1.ReasonCronJobFailed, err.Error())
@@ -295,6 +291,13 @@ func (r *KopiaBackupReconciler) reconcileBackupResources(
 
 	r.setCondition(backup, backupv1alpha1.ConditionTypeCronJobCreated, metav1.ConditionTrue,
 		backupv1alpha1.ReasonReconciled, fmt.Sprintf("CronJob %q is up to date", cronJobName))
+
+	if nodeName == "" {
+		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			backupv1alpha1.ReasonNoPodFound, "No running pod found with the PVC mounted")
+		// Requeue: no watch on all pods; this is a genuinely transient condition.
+		return ctrl.Result{RequeueAfter: requeueDelay}, nil
+	}
 
 	if backup.Spec.Suspend {
 		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,

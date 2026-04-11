@@ -82,7 +82,9 @@ var _ = Describe("KopiaBackup Controller", func() {
 					StorageType:        backupv1alpha1.StorageTypeFilesystem,
 					PasswordSecretName: "kopia-password",
 					FileSystemOptions: backupv1alpha1.KopiaRepositoryStorageFileSystemSpec{
-						Path: "/backup/repo",
+						Path:      "/backup/repo",
+						NFSServer: "nfs.example.com",
+						NFSPath:   "/exports/backup",
 					},
 				},
 			}
