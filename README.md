@@ -124,7 +124,7 @@ Benefits of server mode:
 
 ### Prerequisites
 
-- Go 1.21+
+- Go 1.24+
 - Docker
 - kubectl
 - Access to a Kubernetes cluster
