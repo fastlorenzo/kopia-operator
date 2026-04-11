@@ -11,7 +11,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.14.0
+    controller-gen.kubebuilder.io/version: v0.17.2
   name: kopiabackups.backup.cloudinfra.be
 spec:
   group: backup.cloudinfra.be
@@ -19,13 +19,34 @@ spec:
     kind: KopiaBackup
     listKind: KopiaBackupList
     plural: kopiabackups
+    shortNames:
+    - kb
     singular: kopiabackup
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.pvcName
+      name: PVC
+      type: string
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
+    - jsonPath: .spec.repository
+      name: Repository
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspended
+      type: boolean
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KopiaBackup is the Schema for the kopiabackups API
+        description: KopiaBackup is the Schema for the kopiabackups API.
         properties:
           apiVersion:
             description: |-
@@ -45,35 +66,167 @@ spec:
           metadata:
             type: object
           spec:
-            description: KopiaBackupSpec defines the desired state of KopiaBackup
+            description: KopiaBackupSpec defines the desired state of KopiaBackup.
             properties:
               pvcName:
-                description: Name of the PVC to backup
+                description: Name of the PVC to back up.
+                minLength: 1
                 type: string
               repository:
-                description: KopiaRepository to use for the backup
+                description: Name of the KopiaRepository to use for this backup.
+                minLength: 1
                 type: string
               schedule:
-                description: Schedule for the backup
+                description: Cron schedule for the backup (e.g. "0 3 * * *").
+                minLength: 1
                 type: string
               suspend:
-                description: 'Optional: suspend (default=false) will suspend the cronjob'
+                default: false
+                description: Suspend the CronJob when set to true.
                 type: boolean
+              userCredentialsSecret:
+                description: |-
+                  Server user credentials secret name (auto-populated by the operator in server mode).
+                  Contains username and password for authenticating to the Kopia Server.
+                type: string
             required:
             - pvcName
             - repository
             - schedule
             type: object
           status:
-            description: KopiaBackupStatus defines the observed state of KopiaBackup
+            description: KopiaBackupStatus defines the observed state of KopiaBackup.
             properties:
-              active:
+              autoCreated:
+                description: Whether this KopiaBackup was auto-created from a PVC
+                  label.
                 type: boolean
-              fromAnnotation:
+              backupHistory:
+                description: History of the last 10 backup executions.
+                items:
+                  description: BackupHistoryEntry represents a single backup execution
+                    record.
+                  properties:
+                    completionTime:
+                      description: Timestamp of when the backup completed (nil if
+                        still running).
+                      format: date-time
+                      type: string
+                    jobName:
+                      description: Name of the Job that executed this backup.
+                      type: string
+                    message:
+                      description: Additional details about the backup status.
+                      type: string
+                    startTime:
+                      description: Timestamp of when the backup was started.
+                      format: date-time
+                      type: string
+                    status:
+                      description: Status of the backup.
+                      enum:
+                      - Successful
+                      - Failed
+                      - Pending
+                      - InProgress
+                      type: string
+                  required:
+                  - startTime
+                  - status
+                  type: object
+                type: array
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the backup's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              connected:
+                description: Whether the backup is connected to the server.
                 type: boolean
-            required:
-            - active
-            - fromAnnotation
+              cronJobName:
+                description: Name of the CronJob managed by this backup.
+                type: string
+              lastBackupStatus:
+                description: Status of the last backup.
+                enum:
+                - Successful
+                - Failed
+                - Pending
+                - InProgress
+                type: string
+              lastBackupTime:
+                description: Timestamp of the last backup attempt (regardless of outcome).
+                format: date-time
+                type: string
+              lastSuccessfulBackupTime:
+                description: Timestamp of the last successful backup.
+                format: date-time
+                type: string
+              nodeName:
+                description: Node where the pod using the PVC is running.
+                type: string
+              serverURL:
+                description: Server URL when server mode is enabled.
+                type: string
+              username:
+                description: Username for server authentication.
+                type: string
             type: object
         type: object
     served: true
@@ -85,7 +238,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.14.0
+    controller-gen.kubebuilder.io/version: v0.17.2
   name: kopiarepositories.backup.cloudinfra.be
 spec:
   group: backup.cloudinfra.be
@@ -93,13 +246,31 @@ spec:
     kind: KopiaRepository
     listKind: KopiaRepositoryList
     plural: kopiarepositories
+    shortNames:
+    - krepo
     singular: kopiarepository
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.storageType
+      name: Storage
+      type: string
+    - jsonPath: .spec.hostname
+      name: Hostname
+      type: string
+    - jsonPath: .spec.server.enabled
+      name: Server
+      type: boolean
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KopiaRepository is the Schema for the kopiarepositories API
+        description: KopiaRepository is the Schema for the kopiarepositories API.
         properties:
           apiVersion:
             description: |-
@@ -119,7 +290,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: KopiaRepositorySpec defines the desired state of KopiaRepository
+            description: KopiaRepositorySpec defines the desired state of KopiaRepository.
             properties:
               caching:
                 default: {}
@@ -127,118 +298,413 @@ spec:
                 properties:
                   cacheDirectory:
                     default: cache
+                    description: Directory used for local caching.
                     type: string
-                  contentCacheSizeLimitBytes:
-                    format: int64
-                    type: integer
-                  maxCacheSize:
-                    default: 5242880000
-                    format: int64
-                    type: integer
+                  contentCacheSize:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 5000Mi
+                    description: Maximum size of the content cache.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  contentCacheSizeLimit:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: Hard limit for content cache size.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
                   maxListCacheDuration:
                     default: 30
+                    description: Maximum duration (in seconds) to cache directory
+                      listings.
                     format: int64
+                    minimum: 0
                     type: integer
-                  maxMetadataCacheSize:
-                    default: 5242880000
-                    format: int64
-                    type: integer
-                  metadataCacheSizeLimitBytes:
-                    format: int64
-                    type: integer
+                  metadataCacheSize:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 5000Mi
+                    description: Maximum size of the metadata cache.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  metadataCacheSizeLimit:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: Hard limit for metadata cache size.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
                   minContentSweepAge:
+                    description: Minimum age (in seconds) of content before it can
+                      be swept.
                     format: int64
+                    minimum: 0
                     type: integer
                   minIndexSweepAge:
+                    description: Minimum age (in seconds) of index entries before
+                      they can be swept.
                     format: int64
+                    minimum: 0
                     type: integer
                   minMetadataSweepAge:
+                    description: Minimum age (in seconds) of metadata before it can
+                      be swept.
                     format: int64
+                    minimum: 0
                     type: integer
                 type: object
               defaultSchedule:
-                description: Cronjob for default schedule if not set in KopiaBackup
+                description: Default cron schedule for KopiaBackup resources that
+                  omit their own schedule.
                 type: string
               description:
                 default: Cluster
-                description: Human-readable description of the repository to use in
-                  the UI.
+                description: Human-readable description shown in the Kopia UI.
                 type: string
               enableActions:
-                description: Enables Kopia actions in the repository.
+                default: false
+                description: Enable Kopia actions in the repository.
                 type: boolean
               fileSystemOptions:
+                description: Filesystem storage options (required when storageType
+                  is "filesystem").
                 properties:
                   dirMode:
-                    description: DirectoryMode in the repository.
+                    description: DirectoryMode for directories in the repository.
                     format: int32
+                    maximum: 511
+                    minimum: 0
                     type: integer
                   fileMode:
-                    description: FileMode in the repository.
+                    description: FileMode for files in the repository.
                     format: int32
+                    maximum: 511
+                    minimum: 0
                     type: integer
                   gid:
-                    description: Group ID of the files in the repository.
+                    description: GID of files in the repository.
+                    minimum: 0
                     type: integer
                   nfsPath:
-                    description: Export path on the NFS server for the repository.
+                    description: NFS export path for the repository.
                     type: string
                   nfsServer:
-                    description: NFS server for the repository.
+                    description: NFS server address.
                     type: string
                   path:
-                    description: Path is the path to the repository on the filesystem.
+                    description: Path to the repository on the filesystem.
                     type: string
                   uid:
-                    description: User ID of the files in the repository.
+                    description: UID of files in the repository.
+                    minimum: 0
                     type: integer
                 required:
                 - path
                 type: object
-              formatBlobCacheDuration:
-                default: 900000000000
+              formatBlobCacheDurationSeconds:
+                default: 900
+                description: Duration (in seconds) to cache format blobs.
                 format: int64
                 type: integer
               hostname:
-                description: Kopia repository hostname
+                description: Hostname used by Kopia to identify this repository.
+                minLength: 1
+                type: string
+              passwordSecretName:
+                description: |-
+                  Name of an existing Secret containing the repository password in the KOPIA_PASSWORD key.
+                  The Secret must be in the same namespace as the KopiaRepository.
+                minLength: 1
                 type: string
               permissiveCacheLoading:
-                description: Allow loading from cache even if it's stale
+                description: Allow loading from cache even when stale.
                 type: boolean
-              readonly:
-                description: Make the repository read-only
+              readOnly:
+                description: Make the repository read-only.
                 type: boolean
-              repositoryPassword:
-                description: Password for Kopia repository, ignored if RepositoryPasswordExistingSecret
-                  is set
-                type: string
-              repositoryPasswordExistingSecret:
-                description: Secret name containing the password for the Kopia repository
-                  (must be in the same namespace); the password should be in KOPIA_PASSWORD
-                  key
-                type: string
-              sftpOptions:
+              server:
+                description: Server configuration for running Kopia in server mode.
                 properties:
-                  configMapName:
-                    description: configMapName is a reference to a ConfigMap containing
-                      the SFTP configuration.
+                  adminPasswordSecretName:
+                    description: |-
+                      Name of a Secret containing the server admin password (key: password).
+                      If not provided, the repository password secret is used.
                     type: string
+                  enabled:
+                    default: false
+                    description: |-
+                      Enable Kopia Server mode.
+                      When enabled, the operator deploys a Kopia Server for this repository
+                      and backups connect through the server instead of directly to storage.
+                    type: boolean
+                  exposure:
+                    description: Exposure configuration (how to expose the server).
+                    properties:
+                      servicePort:
+                        default: 51515
+                        description: Port for the Kopia Server service.
+                        format: int32
+                        maximum: 65535
+                        minimum: 1
+                        type: integer
+                      serviceType:
+                        default: ClusterIP
+                        description: Kubernetes Service type.
+                        type: string
+                      type:
+                        default: Service
+                        description: Type of exposure.
+                        enum:
+                        - Service
+                        type: string
+                    type: object
+                  extraArgs:
+                    description: Additional command-line arguments for kopia server
+                      start.
+                    items:
+                      type: string
+                    type: array
+                  image:
+                    default: ghcr.io/fastlorenzo/kopia:latest
+                    description: Container image for the Kopia Server.
+                    type: string
+                  persistentVolumeClaim:
+                    description: |-
+                      PersistentVolumeClaim for server internal state.
+                      If not provided, server uses emptyDir (state lost on restart).
+                    type: string
+                  replicas:
+                    default: 1
+                    description: Number of server replicas.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  resources:
+                    description: Resource requirements for the server.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This is an alpha field and requires enabling the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  tls:
+                    description: TLS configuration for the server.
+                    properties:
+                      certificateCommonName:
+                        description: |-
+                          CertificateCommonName is the CN for the auto-generated certificate.
+                          Defaults to the service name.
+                        type: string
+                      certificateDNSNames:
+                        description: |-
+                          CertificateDNSNames are additional DNS names for the auto-generated certificate.
+                          The service name is always included automatically.
+                        items:
+                          type: string
+                        type: array
+                      secretName:
+                        description: |-
+                          Name of the secret containing TLS certificate and key.
+                          Secret should contain 'tls.crt' and 'tls.key' keys.
+                          If not provided, a self-signed certificate will be auto-generated.
+                        type: string
+                    type: object
+                type: object
+              sftpOptions:
+                description: SFTP storage options (required when storageType is "sftp").
+                properties:
+                  credentialsSecret:
+                    description: |-
+                      Name of Secret containing SFTP credentials.
+                      Expected keys: username, password (optional), keyData (optional - SSH private key).
+                      At least one of password or keyData must be provided.
+                    type: string
+                  dirShards:
+                    description: Directory shards configuration.
+                    items:
+                      type: integer
+                    type: array
+                  externalSSH:
+                    default: false
+                    description: Use external SSH command instead of built-in SSH.
+                    type: boolean
+                  host:
+                    description: SFTP server hostname.
+                    type: string
+                  knownHostsData:
+                    description: Known hosts data for SSH host key verification.
+                    type: string
+                  path:
+                    description: Path to the repository on the SFTP server.
+                    type: string
+                  port:
+                    default: 22
+                    description: SFTP server port.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  sshCommand:
+                    default: ssh
+                    description: SSH command to use when ExternalSSH is true.
+                    type: string
+                required:
+                - credentialsSecret
+                - host
+                - path
                 type: object
               storageType:
-                description: Storage type (currently only filesystem and sftp are
-                  supported)
+                description: Backend storage type.
+                enum:
+                - filesystem
+                - sftp
                 type: string
               username:
-                description: Kopia repository username
+                description: Username used by Kopia to identify the repository owner.
+                minLength: 1
                 type: string
             required:
-            - enableActions
             - hostname
+            - passwordSecretName
             - storageType
             - username
             type: object
           status:
-            description: KopiaRepositoryStatus defines the observed state of KopiaRepository
+            description: KopiaRepositoryStatus defines the observed state of KopiaRepository.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the repository's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              serverDeployment:
+                description: Deployment name of the Kopia Server.
+                type: string
+              serverReady:
+                description: Whether the Kopia Server is deployed and ready (server
+                  mode only).
+                type: boolean
+              serverService:
+                description: Service name for the Kopia Server.
+                type: string
+              serverURL:
+                description: URL to connect to the Kopia Server.
+                type: string
+              tlsCertFingerprint:
+                description: |-
+                  SHA256 fingerprint of the server's TLS certificate (uppercase hex without colons).
+                  Used by clients to verify the server's certificate.
+                type: string
             type: object
         type: object
     served: true
@@ -405,6 +871,8 @@ rules:
   - ""
   resources:
   - configmaps
+  - secrets
+  - services
   verbs:
   - create
   - delete
@@ -416,23 +884,29 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - persistentvolumeclaims
+  - events
   verbs:
-  - get
-  - list
-  - watch
+  - create
+  - patch
 - apiGroups:
   - ""
   resources:
+  - persistentvolumeclaims
   - pods
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - backup.cloudinfra.be
+  - ""
   resources:
-  - kopiabackups
+  - pods/exec
+  verbs:
+  - create
+- apiGroups:
+  - apps
+  resources:
+  - deployments
   verbs:
   - create
   - delete
@@ -444,20 +918,7 @@ rules:
 - apiGroups:
   - backup.cloudinfra.be
   resources:
-  - kopiabackups/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
-  - kopiabackups/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - backup.cloudinfra.be
-  resources:
+  - kopiabackups
   - kopiarepositories
   verbs:
   - create
@@ -470,12 +931,14 @@ rules:
 - apiGroups:
   - backup.cloudinfra.be
   resources:
+  - kopiabackups/finalizers
   - kopiarepositories/finalizers
   verbs:
   - update
 - apiGroups:
   - backup.cloudinfra.be
   resources:
+  - kopiabackups/status
   - kopiarepositories/status
   verbs:
   - get
@@ -646,7 +1109,7 @@ spec:
         - --leader-elect
         command:
         - /manager
-        image: ghcr.io/fastlorenzo/kopia-operator:main
+        image: controller:latest
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
@@ -673,7 +1136,10 @@ spec:
           capabilities:
             drop:
             - ALL
+          readOnlyRootFilesystem: true
       securityContext:
         runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       serviceAccountName: kopia-operator-controller-manager
       terminationGracePeriodSeconds: 10
