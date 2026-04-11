@@ -11,6 +11,8 @@ spec:
     kind: KopiaBackup
     listKind: KopiaBackupList
     plural: kopiabackups
+    shortNames:
+    - kb
     singular: kopiabackup
   scope: Namespaced
   versions:

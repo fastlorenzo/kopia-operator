@@ -2,16 +2,21 @@ package naming
 
 import "fmt"
 
+const (
+	// CronJobPrefix is the name prefix for CronJob resources.
+	CronJobPrefix = "snapshot-"
+)
+
 // CronJobName generates the CronJob name from a PVC name.
 // Name format: snapshot-<first 42 chars>-<last char> if name > 42 chars.
 func CronJobName(pvcName string) string {
 	if pvcName == "" {
-		return "snapshot-unknown"
+		return CronJobPrefix + "unknown"
 	}
 	if len(pvcName) > 42 {
-		return "snapshot-" + pvcName[:42] + "-" + string(pvcName[len(pvcName)-1])
+		return CronJobPrefix + pvcName[:42] + "-" + string(pvcName[len(pvcName)-1])
 	}
-	return "snapshot-" + pvcName
+	return CronJobPrefix + pvcName
 }
 
 // ServerDeploymentName returns the Deployment name for a Kopia Server.

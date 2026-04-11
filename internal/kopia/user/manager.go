@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -25,6 +26,11 @@ import (
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 	"github.com/fastlorenzo/kopia-operator/internal/kopia"
 	"github.com/fastlorenzo/kopia-operator/internal/naming"
+)
+
+const (
+	// execTimeout is the maximum duration for a pod exec command.
+	execTimeout = 30 * time.Second
 )
 
 // PodExecutor is a function type for executing commands in pods.
@@ -281,7 +287,11 @@ func (m *KopiaUserManager) getServerPodName(ctx context.Context, repo *backupv1a
 }
 
 // execInPod executes a command in a pod and returns stdout, stderr, and error.
+// The command is bounded by execTimeout to prevent indefinite hangs.
 func (m *KopiaUserManager) execInPod(ctx context.Context, namespace, podName, containerName string, cmd []string) (string, string, error) {
+	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
+	defer cancel()
+
 	req := m.Clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
@@ -302,7 +312,7 @@ func (m *KopiaUserManager) execInPod(ctx context.Context, namespace, podName, co
 	}
 
 	var stdout, stderr bytes.Buffer
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+	err = exec.StreamWithContext(execCtx, remotecommand.StreamOptions{
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})

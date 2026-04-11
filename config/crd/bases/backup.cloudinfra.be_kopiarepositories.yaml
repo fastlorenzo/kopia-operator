@@ -11,6 +11,8 @@ spec:
     kind: KopiaRepository
     listKind: KopiaRepositoryList
     plural: kopiarepositories
+    shortNames:
+    - krepo
     singular: kopiarepository
   scope: Namespaced
   versions:
@@ -326,8 +328,6 @@ spec:
                           If not provided, a self-signed certificate will be auto-generated.
                         type: string
                     type: object
-                required:
-                - enabled
                 type: object
               sftpOptions:
                 description: SFTP storage options (required when storageType is "sftp").

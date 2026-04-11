@@ -143,6 +143,7 @@ type KopiaBackupStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=kb
 // +kubebuilder:printcolumn:name="PVC",type=string,JSONPath=`.spec.pvcName`
 // +kubebuilder:printcolumn:name="Schedule",type=string,JSONPath=`.spec.schedule`
 // +kubebuilder:printcolumn:name="Repository",type=string,JSONPath=`.spec.repository`

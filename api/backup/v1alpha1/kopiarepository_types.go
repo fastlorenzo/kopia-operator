@@ -93,7 +93,7 @@ type KopiaServerSpec struct {
 	// When enabled, the operator deploys a Kopia Server for this repository
 	// and backups connect through the server instead of directly to storage.
 	// +kubebuilder:default:=false
-	Enabled bool `json:"enabled"`
+	Enabled bool `json:"enabled,omitempty"`
 
 	// Container image for the Kopia Server.
 	// +kubebuilder:default:="ghcr.io/fastlorenzo/kopia:latest"
@@ -335,6 +335,7 @@ type KopiaRepositoryStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=krepo
 // +kubebuilder:printcolumn:name="Storage",type=string,JSONPath=`.spec.storageType`
 // +kubebuilder:printcolumn:name="Hostname",type=string,JSONPath=`.spec.hostname`
 // +kubebuilder:printcolumn:name="Server",type=boolean,JSONPath=`.spec.server.enabled`

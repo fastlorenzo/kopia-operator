@@ -7,6 +7,8 @@ import (
 )
 
 // ServerManager manages the lifecycle of Kopia Server deployments.
+// Methods return wrapped errors with context. IsServerReady returns
+// (false, nil) when the deployment exists but is not yet available.
 type ServerManager interface {
 	// EnsureServerDeployment ensures the Kopia Server Deployment exists and is up-to-date.
 	EnsureServerDeployment(ctx context.Context, repo *backupv1alpha1.KopiaRepository) error
@@ -22,6 +24,9 @@ type ServerManager interface {
 }
 
 // UserManager manages users on the Kopia Server.
+// EnsureUser may return a ServerNotReadyError (from the kopia package)
+// when the server pod is not yet available. Callers should check with
+// errors.As and requeue accordingly.
 type UserManager interface {
 	// EnsureUser ensures a user exists for the backup on the Kopia Server.
 	// Returns the secret name containing the credentials.

@@ -351,7 +351,7 @@ func (r *KopiaBackupReconciler) findPodUsingPVC(ctx context.Context, kBackup *ba
 		if pod.Status.Phase != corev1.PodRunning {
 			continue
 		}
-		if strings.HasPrefix(pod.Name, "snapshot-") {
+		if strings.HasPrefix(pod.Name, naming.CronJobPrefix) {
 			continue
 		}
 		for _, volume := range pod.Spec.Volumes {
