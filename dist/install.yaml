@@ -1109,7 +1109,7 @@ spec:
         - --leader-elect
         command:
         - /manager
-        image: controller:latest
+        image: ghcr.io/fastlorenzo/kopia-operator:latest
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
