@@ -256,6 +256,13 @@ func (m *KopiaServerManager) constructServerDeployment(
 			{Name: "api", ContainerPort: defaultServerPort, Protocol: corev1.ProtocolTCP},
 		},
 		Resources: repo.Spec.Server.Resources,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: ptr.To(false),
+			ReadOnlyRootFilesystem:   ptr.To(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+		},
 		LivenessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(defaultServerPort)},
@@ -306,6 +313,12 @@ func (m *KopiaServerManager) constructServerDeployment(
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: ptr.To(true),
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
 					Containers: []corev1.Container{container},
 					Volumes:    volumes,
 				},

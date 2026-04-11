@@ -124,12 +124,21 @@ func buildCronJob(
 		)
 	}
 
+	containerSecCtx := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr.To(false),
+		ReadOnlyRootFilesystem:   ptr.To(true),
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		},
+	}
+
 	initContainers := []corev1.Container{
 		{
-			Name:    "wait",
-			Image:   kopiaImage,
-			Command: []string{"/scripts/sleep.sh"},
-			Args:    []string{"1", "10"},
+			Name:            "wait",
+			Image:           kopiaImage,
+			Command:         []string{"/scripts/sleep.sh"},
+			Args:            []string{"1", "10"},
+			SecurityContext: containerSecCtx,
 		},
 	}
 
@@ -170,6 +179,12 @@ func buildCronJob(
 							},
 						},
 						Spec: corev1.PodSpec{
+							SecurityContext: &corev1.PodSecurityContext{
+								RunAsNonRoot: ptr.To(true),
+								SeccompProfile: &corev1.SeccompProfile{
+									Type: corev1.SeccompProfileTypeRuntimeDefault,
+								},
+							},
 							Affinity: &corev1.Affinity{
 								NodeAffinity: &corev1.NodeAffinity{
 									RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
@@ -190,12 +205,13 @@ func buildCronJob(
 							InitContainers: initContainers,
 							Containers: []corev1.Container{
 								{
-									Name:         "snapshot",
-									Image:        kopiaImage,
-									Args:         []string{"/bin/bash", "-c", buildBackupCommand(backup, repo, mountPath)},
-									Env:          envVars,
-									EnvFrom:      envFrom,
-									VolumeMounts: volumeMounts,
+									Name:            "snapshot",
+									Image:           kopiaImage,
+									Args:            []string{"/bin/bash", "-c", buildBackupCommand(backup, repo, mountPath)},
+									Env:             envVars,
+									EnvFrom:         envFrom,
+									VolumeMounts:    volumeMounts,
+									SecurityContext: containerSecCtx,
 								},
 							},
 							Volumes:       volumes,
