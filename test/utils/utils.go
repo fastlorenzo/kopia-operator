@@ -52,7 +52,7 @@ func LoadImageToKindClusterWithName(name string) error {
 		cluster = v
 	}
 	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
-	cmd := exec.Command("kind", kindOptions...)
+	cmd := exec.Command("kind", kindOptions...) // #nosec G204 -- test utility, inputs are controlled
 	_, err := Run(cmd)
 	return err
 }
