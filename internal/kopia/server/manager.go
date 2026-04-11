@@ -247,7 +247,7 @@ func (m *KopiaServerManager) constructServerDeployment(
 	container := corev1.Container{
 		Name:            "kopia-server",
 		Image:           image,
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		ImagePullPolicy: corev1.PullAlways,
 		Command:         []string{"/bin/sh", "-c"},
 		Args:            []string{serverCmd},
 		Env:             env,
