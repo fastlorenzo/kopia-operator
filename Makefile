@@ -75,6 +75,10 @@ SHELL = /usr/bin/env bash -o pipefail
 .PHONY: all
 all: build
 
+.PHONY: clean
+clean: ## Remove build artifacts.
+	rm -rf $(LOCALBIN) cover.out dist/ output-dir/
+
 ##@ General
 
 # The help target prints out all targets with their descriptions organized
