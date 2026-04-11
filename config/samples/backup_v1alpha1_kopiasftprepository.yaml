@@ -1,3 +1,5 @@
+# Sample KopiaRepository with SFTP backend.
+# See docs/ and ARCHITECTURE.md for full configuration reference.
 apiVersion: backup.cloudinfra.be/v1alpha1
 kind: KopiaRepository
 metadata:

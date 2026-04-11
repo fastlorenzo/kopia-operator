@@ -598,6 +598,21 @@ The operator handles various error scenarios:
 
 All errors are logged with appropriate context for debugging.
 
+## Security Context
+
+All pods created by the operator run with a hardened security posture:
+
+**Pod-level:**
+- `runAsNonRoot: true`
+- `seccompProfile: RuntimeDefault`
+
+**Container-level (server, init, and snapshot containers):**
+- `allowPrivilegeEscalation: false`
+- `readOnlyRootFilesystem: true`
+- `capabilities: drop: ["ALL"]`
+
+The server container image uses `PullAlways` to ensure digest-pinned images are always verified.
+
 ## Conclusion
 
 The Kopia Operator provides a robust, Kubernetes-native solution for automating PVC backups using Kopia. Its design follows best practices for operators, including:
