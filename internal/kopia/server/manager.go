@@ -89,12 +89,10 @@ func (m *KopiaServerManager) EnsureServerDeployment(
 		return m.Client.Create(ctx, desired)
 	}
 
-	existing.Spec.Replicas = desired.Spec.Replicas
-	existing.Spec.Selector = desired.Spec.Selector
-	existing.Spec.Template = desired.Spec.Template
 	if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
 		return nil
 	}
+	existing.Spec = desired.Spec
 	logger.Info("Updating Kopia Server Deployment", "name", deploymentName)
 	return m.Client.Update(ctx, existing)
 }
