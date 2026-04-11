@@ -330,12 +330,37 @@ func (r *KopiaBackupReconciler) getRelatedPVC(ctx context.Context, kBackup *back
 	return &pvc, nil
 }
 
+// getKopiaRepository looks up a KopiaRepository by name, first in the given
+// namespace and then across all namespaces. Returns an error if no match is
+// found or if more than one cross-namespace match exists (ambiguous).
 func (r *KopiaBackupReconciler) getKopiaRepository(ctx context.Context, name, namespace string) (*backupv1alpha1.KopiaRepository, error) {
+	// Try the local namespace first.
 	var repo backupv1alpha1.KopiaRepository
-	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &repo); err != nil {
-		return nil, fmt.Errorf("failed to get KopiaRepository %q: %w", name, err)
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &repo); err == nil {
+		return &repo, nil
 	}
-	return &repo, nil
+
+	// Fall back to searching all namespaces.
+	var repoList backupv1alpha1.KopiaRepositoryList
+	if err := r.List(ctx, &repoList); err != nil {
+		return nil, fmt.Errorf("listing KopiaRepositories: %w", err)
+	}
+
+	var matches []backupv1alpha1.KopiaRepository
+	for i := range repoList.Items {
+		if repoList.Items[i].Name == name {
+			matches = append(matches, repoList.Items[i])
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("KopiaRepository %q not found in namespace %q or cluster-wide", name, namespace)
+	case 1:
+		return &matches[0], nil
+	default:
+		return nil, fmt.Errorf("ambiguous: found %d KopiaRepositories named %q across namespaces", len(matches), name)
+	}
 }
 
 func (r *KopiaBackupReconciler) findPodUsingPVC(ctx context.Context, kBackup *backupv1alpha1.KopiaBackup) (nodeName, appName, podName string) {
