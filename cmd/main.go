@@ -92,22 +92,28 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	mgrOptions := ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress:   metricsAddr,
 			SecureServing: secureMetrics,
 			TLSOpts:       tlsOpts,
 		},
-		WebhookServer: webhookserver.NewServer(webhookserver.Options{
-			Port:    9443,
-			TLSOpts: tlsOpts,
-		}),
 		HealthProbeBindAddress:        probeAddr,
 		LeaderElection:                enableLeaderElection,
 		LeaderElectionID:              "71b0af1d.cloudinfra.be",
 		LeaderElectionReleaseOnCancel: true,
-	})
+	}
+	// Only start the webhook server when webhooks are enabled, to avoid
+	// requiring TLS certs in environments where ENABLE_WEBHOOKS=false.
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		mgrOptions.WebhookServer = webhookserver.NewServer(webhookserver.Options{
+			Port:    9443,
+			TLSOpts: tlsOpts,
+		})
+	}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), mgrOptions)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
