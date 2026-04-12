@@ -273,6 +273,18 @@ func buildServerModeConfig(
 		Value: "/cache/kopia",
 	})
 
+	// Override image-baked KOPIA_CONFIG_PATH and KOPIA_LOG_DIR so they point
+	// to the writable emptyDir cache volume instead of the read-only root FS.
+	envVars = append(envVars, corev1.EnvVar{
+		Name:  "KOPIA_CONFIG_PATH",
+		Value: "/cache/kopia/repository.config",
+	})
+
+	envVars = append(envVars, corev1.EnvVar{
+		Name:  "KOPIA_LOG_DIR",
+		Value: "/cache/kopia/logs",
+	})
+
 	return envVars, envFrom, volumeMounts, volumes
 }
 
