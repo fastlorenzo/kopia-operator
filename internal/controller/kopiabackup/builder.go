@@ -55,7 +55,7 @@ kopia repository connect server \
   --override-hostname="${KOPIA_SERVER_USERNAME#*@}"
 
 echo "[2/4] Creating snapshot..."
-kopia snapshot create %s
+kopia snapshot create --ignore-permission-errors %s
 
 echo "[3/4] Listing snapshots..."
 kopia snapshot list %s
@@ -67,7 +67,7 @@ kopia repository disconnect
 
 	return fmt.Sprintf(`set -e
 echo "[1/4] Creating snapshot..."
-kopia snapshot create %s
+kopia snapshot create --ignore-permission-errors %s
 
 echo "[2/4] Listing snapshots..."
 kopia snapshot list %s
