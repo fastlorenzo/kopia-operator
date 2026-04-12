@@ -204,12 +204,14 @@ func (m *KopiaServerManager) constructServerDeployment(
 	volumeMounts := []corev1.VolumeMount{
 		{Name: "cache", MountPath: "/cache"},
 		{Name: "config", MountPath: "/config"},
+		{Name: "tmp", MountPath: "/tmp"},
 		{Name: "tls", MountPath: "/tls", ReadOnly: true},
 	}
 
 	volumes := []corev1.Volume{
 		{Name: "cache", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{
 			Name: "tls",
 			VolumeSource: corev1.VolumeSource{
