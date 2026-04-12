@@ -39,8 +39,12 @@ const (
 // buildBackupCommand builds the shell command to run in the backup container.
 func buildBackupCommand(_ *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.KopiaRepository, mountPath string) string {
 	if repo.Spec.Server.Enabled {
+		port := int32(51515)
+		if repo.Spec.Server.Exposure.ServicePort != 0 {
+			port = repo.Spec.Server.Exposure.ServicePort
+		}
 		serverURL := fmt.Sprintf("https://kopia-server-%s.%s.svc.cluster.local:%d",
-			repo.Name, repo.Namespace, repo.Spec.Server.Exposure.ServicePort)
+			repo.Name, repo.Namespace, port)
 
 		return fmt.Sprintf(`set -e
 echo "[1/4] Connecting to Kopia Server..."
