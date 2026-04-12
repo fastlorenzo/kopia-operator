@@ -61,7 +61,7 @@ echo "[3/4] Listing snapshots..."
 kopia snapshot list %s
 
 echo "[4/4] Disconnecting repository..."
-kopia repository disconnect
+kopia repository disconnect || true
 `, serverURL, mountPath, mountPath)
 	}
 
