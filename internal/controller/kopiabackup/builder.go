@@ -133,6 +133,10 @@ func buildCronJob(
 		ReadOnlyRootFilesystem:   ptr.To(true),
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
+			// DAC_READ_SEARCH allows root (UID 0) to bypass DAC permission checks
+			// when reading PVC data owned by non-root UIDs (e.g. linuxserver.io
+			// images running as UID 10004 with mode 0770 dirs).
+			Add: []corev1.Capability{"DAC_READ_SEARCH"},
 		},
 	}
 
