@@ -61,7 +61,8 @@ echo "[3/4] Listing snapshots..."
 kopia snapshot list %s
 
 echo "[4/4] Disconnecting repository..."
-kopia repository disconnect || true
+mkdir -p "${KOPIA_LOG_DIR}/cli-logs"
+kopia repository disconnect 2>/dev/null || true
 `, serverURL, mountPath, mountPath)
 	}
 
