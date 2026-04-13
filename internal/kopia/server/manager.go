@@ -501,6 +501,7 @@ func (m *KopiaServerManager) writeSFTPCredentialSetup(b *strings.Builder, _ *bac
 	b.WriteString(`SFTP_USER=$(cat /sftp-creds/username 2>/dev/null || echo "")
 SFTP_PASSWORD=$(cat /sftp-creds/password 2>/dev/null || echo "")
 SFTP_KEY=$(cat /sftp-creds/keyData 2>/dev/null || echo "")
+SFTP_KNOWN_HOSTS=$(cat /sftp-creds/knownHostsData 2>/dev/null || echo "")
 if [ -z "$SFTP_USER" ]; then echo "ERROR: SFTP username not found in secret"; exit 1; fi
 `)
 }
@@ -523,9 +524,18 @@ fi
 `, cmdVar, cmdVar, cmdVar, cmdVar)
 
 	if repo.Spec.SFTPOptions.KnownHostsData != "" {
+		// Known hosts data provided inline in the CR spec.
 		fmt.Fprintf(b, "cat > /tmp/known_hosts <<'KNOWN_HOSTS_EOF'\n%s\nKNOWN_HOSTS_EOF\n", repo.Spec.SFTPOptions.KnownHostsData)
 		b.WriteString("CLEANUP_FILES=\"$CLEANUP_FILES /tmp/known_hosts\"\n")
 		fmt.Fprintf(b, "%s=\"$%s --known-hosts=/tmp/known_hosts\"\n", cmdVar, cmdVar)
+	} else {
+		// Fallback: read knownHostsData from the credentials secret.
+		fmt.Fprintf(b, `if [ -n "$SFTP_KNOWN_HOSTS" ]; then
+  printf '%%s\n' "$SFTP_KNOWN_HOSTS" > /tmp/known_hosts
+  CLEANUP_FILES="$CLEANUP_FILES /tmp/known_hosts"
+  %s="$%s --known-hosts=/tmp/known_hosts"
+fi
+`, cmdVar, cmdVar)
 	}
 	if repo.Spec.SFTPOptions.ExternalSSH {
 		sshCmd := "ssh"
