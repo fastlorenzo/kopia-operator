@@ -530,8 +530,10 @@ fi
 		fmt.Fprintf(b, "%s=\"$%s --known-hosts=/tmp/known_hosts\"\n", cmdVar, cmdVar)
 	} else {
 		// Fallback: read knownHostsData from the credentials secret.
+		// The secret value may contain literal \n sequences instead of real newlines,
+		// so we use printf %b to interpret escape sequences.
 		fmt.Fprintf(b, `if [ -n "$SFTP_KNOWN_HOSTS" ]; then
-  printf '%%s\n' "$SFTP_KNOWN_HOSTS" > /tmp/known_hosts
+  printf '%%b' "$SFTP_KNOWN_HOSTS" > /tmp/known_hosts
   CLEANUP_FILES="$CLEANUP_FILES /tmp/known_hosts"
   %s="$%s --known-hosts=/tmp/known_hosts"
 fi
