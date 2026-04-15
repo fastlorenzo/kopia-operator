@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -480,6 +481,71 @@ func (r *KopiaBackupReconciler) findBackupsForField(fieldName string) handler.Ma
 	}
 }
 
+// podRunningPredicate fires only when a Pod transitions to Running phase or
+// is assigned a node name for the first time. This limits reconcile noise to
+// the events that actually change which node a PVC is attached to.
+type podRunningPredicate struct{ predicate.Funcs }
+
+func (podRunningPredicate) Create(e event.CreateEvent) bool {
+	pod, ok := e.Object.(*corev1.Pod)
+	return ok && pod.Status.Phase == corev1.PodRunning
+}
+
+func (podRunningPredicate) Update(e event.UpdateEvent) bool {
+	old, okOld := e.ObjectOld.(*corev1.Pod)
+	new, okNew := e.ObjectNew.(*corev1.Pod)
+	if !okOld || !okNew {
+		return false
+	}
+	// Fire when: pod becomes Running, or NodeName is newly assigned.
+	phaseChanged := old.Status.Phase != corev1.PodRunning && new.Status.Phase == corev1.PodRunning
+	nodeAssigned := old.Spec.NodeName == "" && new.Spec.NodeName != ""
+	return phaseChanged || nodeAssigned
+}
+
+func (podRunningPredicate) Delete(e event.DeleteEvent) bool  { return false }
+func (podRunningPredicate) Generic(e event.GenericEvent) bool { return false }
+
+// findBackupsForPod returns a MapFunc that enqueues KopiaBackup reconcile
+// requests for every PVC mounted by the given pod. Backup job pods are
+// excluded to avoid feedback loops.
+func (r *KopiaBackupReconciler) findBackupsForPod() handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		log := ctrllog.FromContext(ctx)
+		pod, ok := obj.(*corev1.Pod)
+		if !ok {
+			return nil
+		}
+		// Skip backup job pods — they don't own PVCs we care about.
+		if strings.HasPrefix(pod.Name, naming.CronJobPrefix) {
+			return nil
+		}
+		var requests []reconcile.Request
+		for _, vol := range pod.Spec.Volumes {
+			if pvc := vol.PersistentVolumeClaim; pvc != nil {
+				var backups backupv1alpha1.KopiaBackupList
+				if err := r.List(ctx, &backups,
+					client.InNamespace(pod.Namespace),
+					client.MatchingFields{pvcNameField: pvc.ClaimName},
+				); err != nil {
+					log.Error(err, "Failed to list KopiaBackups for pod PVC",
+						"pod", pod.Name, "pvc", pvc.ClaimName)
+					continue
+				}
+				for _, b := range backups.Items {
+					requests = append(requests, reconcile.Request{
+						NamespacedName: types.NamespacedName{
+							Name:      b.Name,
+							Namespace: b.Namespace,
+						},
+					})
+				}
+			}
+		}
+		return requests
+	}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Field indexer for PVC name lookup.
@@ -529,6 +595,16 @@ func (r *KopiaBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&backupv1alpha1.KopiaRepository{},
 			handler.EnqueueRequestsFromMapFunc(r.findBackupsForField(repositoryNameField)),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		// Watch Pods so the CronJob node affinity is updated immediately when the
+		// pod using a PVC moves to a different node (e.g. after a StatefulSet
+		// restart). Without this watch the CronJob retains stale affinity until
+		// something else triggers a reconcile, causing snapshot jobs to be
+		// scheduled on the wrong node and hang indefinitely (RWO PVC conflict).
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.findBackupsForPod()),
+			builder.WithPredicates(podRunningPredicate{}),
 		).
 		Complete(r)
 }
