@@ -503,7 +503,7 @@ func (podRunningPredicate) Update(e event.UpdateEvent) bool {
 	return phaseChanged || nodeAssigned
 }
 
-func (podRunningPredicate) Delete(e event.DeleteEvent) bool { return false }
+func (podRunningPredicate) Delete(e event.DeleteEvent) bool   { return false }
 func (podRunningPredicate) Generic(e event.GenericEvent) bool { return false }
 
 // findBackupsForPod returns a MapFunc that enqueues KopiaBackup reconcile
