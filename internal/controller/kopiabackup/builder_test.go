@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
 	"github.com/fastlorenzo/kopia-operator/internal/naming"
@@ -136,6 +137,32 @@ var _ = Describe("CronJob Builder", func() {
 		It("should omit node affinity with empty nodeName", func() {
 			cj := buildCronJob(backup, "snapshot-my-pvc", "", "my-app", repo, "")
 			Expect(cj.Spec.JobTemplate.Spec.Template.Spec.Affinity).To(BeNil())
+		})
+
+		It("should default jobs history limits to 3 successful / 1 failed when unset", func() {
+			backup.Spec.SuccessfulJobsHistoryLimit = nil
+			backup.Spec.FailedJobsHistoryLimit = nil
+			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			Expect(cj.Spec.SuccessfulJobsHistoryLimit).NotTo(BeNil())
+			Expect(*cj.Spec.SuccessfulJobsHistoryLimit).To(Equal(int32(3)))
+			Expect(cj.Spec.FailedJobsHistoryLimit).NotTo(BeNil())
+			Expect(*cj.Spec.FailedJobsHistoryLimit).To(Equal(int32(1)))
+		})
+
+		It("should honor explicit jobs history limits from the spec", func() {
+			backup.Spec.SuccessfulJobsHistoryLimit = ptr.To(int32(7))
+			backup.Spec.FailedJobsHistoryLimit = ptr.To(int32(5))
+			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			Expect(*cj.Spec.SuccessfulJobsHistoryLimit).To(Equal(int32(7)))
+			Expect(*cj.Spec.FailedJobsHistoryLimit).To(Equal(int32(5)))
+		})
+
+		It("should honor an explicit zero jobs history limit", func() {
+			backup.Spec.SuccessfulJobsHistoryLimit = ptr.To(int32(0))
+			backup.Spec.FailedJobsHistoryLimit = ptr.To(int32(0))
+			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			Expect(*cj.Spec.SuccessfulJobsHistoryLimit).To(Equal(int32(0)))
+			Expect(*cj.Spec.FailedJobsHistoryLimit).To(Equal(int32(0)))
 		})
 	})
 

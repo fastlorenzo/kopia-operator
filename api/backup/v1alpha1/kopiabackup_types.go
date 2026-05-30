@@ -86,6 +86,20 @@ type KopiaBackupSpec struct {
 	// +kubebuilder:default:=false
 	Suspend bool `json:"suspend,omitempty"`
 
+	// SuccessfulJobsHistoryLimit is the number of successful finished jobs to retain.
+	// Defaults to 3, matching the Kubernetes CronJob default.
+	// +kubebuilder:default:=3
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	SuccessfulJobsHistoryLimit *int32 `json:"successfulJobsHistoryLimit,omitempty"`
+
+	// FailedJobsHistoryLimit is the number of failed finished jobs to retain.
+	// Defaults to 1, matching the Kubernetes CronJob default.
+	// +kubebuilder:default:=1
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	FailedJobsHistoryLimit *int32 `json:"failedJobsHistoryLimit,omitempty"`
+
 	// Server user credentials secret name (auto-populated by the operator in server mode).
 	// Contains username and password for authenticating to the Kopia Server.
 	// +optional
