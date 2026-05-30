@@ -32,8 +32,12 @@ import (
 )
 
 const (
-	// maxBackupHistoryEntries is the maximum number of backup history entries to keep.
-	maxBackupHistoryEntries = 10
+	// defaultSuccessfulJobsHistoryLimit is the fallback retention for successful
+	// jobs when a KopiaBackup does not specify one (matches the Kubernetes default).
+	defaultSuccessfulJobsHistoryLimit int32 = 3
+	// defaultFailedJobsHistoryLimit is the fallback retention for failed jobs
+	// when a KopiaBackup does not specify one (matches the Kubernetes default).
+	defaultFailedJobsHistoryLimit int32 = 1
 )
 
 // buildBackupCommand builds the shell command to run in the backup container.
@@ -100,6 +104,15 @@ func buildCronJob(
 	kopiaCacheDirectory := repo.Spec.Caching.CacheDirectory
 	kopiaLogDir := filepath.Join(repo.Spec.FileSystemOptions.Path, ".kopia", "logs")
 
+	successfulJobsHistoryLimit := backup.Spec.SuccessfulJobsHistoryLimit
+	if successfulJobsHistoryLimit == nil {
+		successfulJobsHistoryLimit = ptr.To(defaultSuccessfulJobsHistoryLimit)
+	}
+	failedJobsHistoryLimit := backup.Spec.FailedJobsHistoryLimit
+	if failedJobsHistoryLimit == nil {
+		failedJobsHistoryLimit = ptr.To(defaultFailedJobsHistoryLimit)
+	}
+
 	envVars := []corev1.EnvVar{
 		{Name: "KOPIA_LOG_DIR", Value: kopiaLogDir},
 	}
@@ -165,8 +178,8 @@ func buildCronJob(
 			ConcurrencyPolicy:          batchv1.ForbidConcurrent,
 			Schedule:                   backup.Spec.Schedule,
 			Suspend:                    &backup.Spec.Suspend,
-			SuccessfulJobsHistoryLimit: ptr.To(int32(maxBackupHistoryEntries)),
-			FailedJobsHistoryLimit:     ptr.To(int32(maxBackupHistoryEntries)),
+			SuccessfulJobsHistoryLimit: successfulJobsHistoryLimit,
+			FailedJobsHistoryLimit:     failedJobsHistoryLimit,
 			JobTemplate: batchv1.JobTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{

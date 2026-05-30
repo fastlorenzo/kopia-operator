@@ -58,6 +58,14 @@ spec:
           spec:
             description: KopiaBackupSpec defines the desired state of KopiaBackup.
             properties:
+              failedJobsHistoryLimit:
+                default: 1
+                description: |-
+                  FailedJobsHistoryLimit is the number of failed finished jobs to retain.
+                  Defaults to 1, matching the Kubernetes CronJob default.
+                format: int32
+                minimum: 0
+                type: integer
               pvcName:
                 description: Name of the PVC to back up.
                 minLength: 1
@@ -70,6 +78,14 @@ spec:
                 description: Cron schedule for the backup (e.g. "0 3 * * *").
                 minLength: 1
                 type: string
+              successfulJobsHistoryLimit:
+                default: 3
+                description: |-
+                  SuccessfulJobsHistoryLimit is the number of successful finished jobs to retain.
+                  Defaults to 3, matching the Kubernetes CronJob default.
+                format: int32
+                minimum: 0
+                type: integer
               suspend:
                 default: false
                 description: Suspend the CronJob when set to true.
