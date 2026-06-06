@@ -441,15 +441,23 @@ func (r *KopiaBackupReconciler) reconcileCronJob(
 		return fmt.Errorf("failed to get CronJob: %w", err)
 	}
 
+	// Snapshot the current spec BEFORE mutating so the change detection below
+	// compares the actual cluster state against the desired state. Comparing the
+	// already-mutated copy against desired would always be equal and skip the
+	// Update (e.g. node affinity would never get persisted after the CronJob was
+	// first created without a running pod).
+	originalSpec := existing.Spec.DeepCopy()
+
 	existing.Spec.Schedule = desired.Spec.Schedule
 	existing.Spec.Suspend = desired.Spec.Suspend
 	existing.Spec.ConcurrencyPolicy = desired.Spec.ConcurrencyPolicy
 	existing.Spec.SuccessfulJobsHistoryLimit = desired.Spec.SuccessfulJobsHistoryLimit
 	existing.Spec.FailedJobsHistoryLimit = desired.Spec.FailedJobsHistoryLimit
+	existing.Spec.JobTemplate.Spec.Template.ObjectMeta = desired.Spec.JobTemplate.Spec.Template.ObjectMeta
 	existing.Spec.JobTemplate.Spec.Template.Spec = desired.Spec.JobTemplate.Spec.Template.Spec
 	existing.Spec.JobTemplate.Spec.Suspend = desired.Spec.JobTemplate.Spec.Suspend
 
-	if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+	if equality.Semantic.DeepEqual(originalSpec, &existing.Spec) {
 		return nil
 	}
 	return r.Update(ctx, existing)
