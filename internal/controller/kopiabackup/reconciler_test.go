@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -31,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	backupv1alpha1 "github.com/fastlorenzo/kopia-operator/api/backup/v1alpha1"
+	"github.com/fastlorenzo/kopia-operator/internal/naming"
 )
 
 var _ = Describe("KopiaBackup Controller", func() {
@@ -192,6 +194,88 @@ var _ = Describe("KopiaBackup Controller", func() {
 				},
 			})
 			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should re-apply node affinity on an existing CronJob that lacks it", func() {
+			// Regression test: reconcileCronJob used to compare the already-mutated
+			// "existing" object against "desired", which made the equality check
+			// always true and skipped the Update. A CronJob created while no pod was
+			// running (no affinity) would therefore never get node affinity even
+			// after a pod started, leaving snapshot pods stuck on the wrong node.
+			controllerReconciler := &KopiaBackupReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Recorder: record.NewFakeRecorder(10),
+			}
+
+			const targetNode = "worker-node-1"
+
+			By("creating a running pod that mounts the PVC on a specific node")
+			consumerPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc-consumer",
+					Namespace: namespace,
+					Labels:    map[string]string{"app.kubernetes.io/name": "consumer"},
+				},
+				Spec: corev1.PodSpec{
+					NodeName: targetNode,
+					Containers: []corev1.Container{{
+						Name:  "app",
+						Image: "busybox",
+					}},
+					Volumes: []corev1.Volume{{
+						Name: "data",
+						VolumeSource: corev1.VolumeSource{
+							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+								ClaimName: pvcName,
+							},
+						},
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, consumerPod)).To(Succeed())
+			// Pod phase is part of status and must be set after creation.
+			consumerPod.Status.Phase = corev1.PodRunning
+			Expect(k8sClient.Status().Update(ctx, consumerPod)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, consumerPod)
+			})
+
+			By("reconciling so the CronJob gets created with affinity")
+			// First reconcile adds the finalizer, second does the real work.
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			cronJobKey := types.NamespacedName{
+				Name:      naming.CronJobName(pvcName),
+				Namespace: namespace,
+			}
+			cronJob := &batchv1.CronJob{}
+			Expect(k8sClient.Get(ctx, cronJobKey, cronJob)).To(Succeed())
+			Expect(cronJob.Spec.JobTemplate.Spec.Template.Spec.Affinity).NotTo(BeNil(),
+				"CronJob should have node affinity after reconcile with a running pod")
+
+			By("simulating the broken legacy state: stripping affinity from the CronJob")
+			cronJob.Spec.JobTemplate.Spec.Template.Spec.Affinity = nil
+			Expect(k8sClient.Update(ctx, cronJob)).To(Succeed())
+
+			By("reconciling again should re-apply the affinity (Update must not be skipped)")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			fixed := &batchv1.CronJob{}
+			Expect(k8sClient.Get(ctx, cronJobKey, fixed)).To(Succeed())
+			affinity := fixed.Spec.JobTemplate.Spec.Template.Spec.Affinity
+			Expect(affinity).NotTo(BeNil(), "affinity must be restored on reconcile")
+			Expect(affinity.NodeAffinity).NotTo(BeNil())
+			terms := affinity.NodeAffinity.
+				RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+			Expect(terms).To(HaveLen(1))
+			Expect(terms[0].MatchExpressions).To(HaveLen(1))
+			Expect(terms[0].MatchExpressions[0].Key).To(Equal("kubernetes.io/hostname"))
+			Expect(terms[0].MatchExpressions[0].Values).To(ContainElement(targetNode))
 		})
 	})
 })
