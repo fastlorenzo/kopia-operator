@@ -68,6 +68,32 @@ spec:
           spec:
             description: KopiaBackupSpec defines the desired state of KopiaBackup.
             properties:
+              activeDeadlineSeconds:
+                default: 21600
+                description: |-
+                  ActiveDeadlineSeconds is the maximum duration, in seconds, a backup Job may
+                  run before it is terminated and marked failed. This guards against a pod
+                  that gets stuck (e.g. never leaves Init) blocking all future runs under the
+                  Forbid concurrency policy. Defaults to 21600 (6h).
+                format: int64
+                minimum: 1
+                type: integer
+              backoffLimit:
+                default: 3
+                description: |-
+                  BackoffLimit is the number of retries before a backup Job is marked failed.
+                  Defaults to 3.
+                format: int32
+                minimum: 0
+                type: integer
+              failedJobsHistoryLimit:
+                default: 1
+                description: |-
+                  FailedJobsHistoryLimit is the number of failed finished jobs to retain.
+                  Defaults to 1, matching the Kubernetes CronJob default.
+                format: int32
+                minimum: 0
+                type: integer
               pvcName:
                 description: Name of the PVC to back up.
                 minLength: 1
@@ -80,10 +106,27 @@ spec:
                 description: Cron schedule for the backup (e.g. "0 3 * * *").
                 minLength: 1
                 type: string
+              successfulJobsHistoryLimit:
+                default: 3
+                description: |-
+                  SuccessfulJobsHistoryLimit is the number of successful finished jobs to retain.
+                  Defaults to 3, matching the Kubernetes CronJob default.
+                format: int32
+                minimum: 0
+                type: integer
               suspend:
                 default: false
                 description: Suspend the CronJob when set to true.
                 type: boolean
+              ttlSecondsAfterFinished:
+                default: 86400
+                description: |-
+                  TTLSecondsAfterFinished is the time-to-live, in seconds, for a finished
+                  (completed or failed) backup Job before it is automatically deleted. This
+                  keeps finished Jobs from accumulating indefinitely. Defaults to 86400 (24h).
+                format: int32
+                minimum: 0
+                type: integer
               userCredentialsSecret:
                 description: |-
                   Server user credentials secret name (auto-populated by the operator in server mode).

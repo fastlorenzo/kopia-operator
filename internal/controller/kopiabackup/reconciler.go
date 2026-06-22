@@ -453,6 +453,9 @@ func (r *KopiaBackupReconciler) reconcileCronJob(
 	existing.Spec.ConcurrencyPolicy = desired.Spec.ConcurrencyPolicy
 	existing.Spec.SuccessfulJobsHistoryLimit = desired.Spec.SuccessfulJobsHistoryLimit
 	existing.Spec.FailedJobsHistoryLimit = desired.Spec.FailedJobsHistoryLimit
+	existing.Spec.JobTemplate.Spec.TTLSecondsAfterFinished = desired.Spec.JobTemplate.Spec.TTLSecondsAfterFinished
+	existing.Spec.JobTemplate.Spec.ActiveDeadlineSeconds = desired.Spec.JobTemplate.Spec.ActiveDeadlineSeconds
+	existing.Spec.JobTemplate.Spec.BackoffLimit = desired.Spec.JobTemplate.Spec.BackoffLimit
 	existing.Spec.JobTemplate.Spec.Template.ObjectMeta = desired.Spec.JobTemplate.Spec.Template.ObjectMeta
 	existing.Spec.JobTemplate.Spec.Template.Spec = desired.Spec.JobTemplate.Spec.Template.Spec
 	existing.Spec.JobTemplate.Spec.Suspend = desired.Spec.JobTemplate.Spec.Suspend
