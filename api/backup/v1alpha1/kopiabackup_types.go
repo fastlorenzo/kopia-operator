@@ -100,6 +100,30 @@ type KopiaBackupSpec struct {
 	// +optional
 	FailedJobsHistoryLimit *int32 `json:"failedJobsHistoryLimit,omitempty"`
 
+	// TTLSecondsAfterFinished is the time-to-live, in seconds, for a finished
+	// (completed or failed) backup Job before it is automatically deleted. This
+	// keeps finished Jobs from accumulating indefinitely. Defaults to 86400 (24h).
+	// +kubebuilder:default:=86400
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
+
+	// ActiveDeadlineSeconds is the maximum duration, in seconds, a backup Job may
+	// run before it is terminated and marked failed. This guards against a pod
+	// that gets stuck (e.g. never leaves Init) blocking all future runs under the
+	// Forbid concurrency policy. Defaults to 21600 (6h).
+	// +kubebuilder:default:=21600
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	ActiveDeadlineSeconds *int64 `json:"activeDeadlineSeconds,omitempty"`
+
+	// BackoffLimit is the number of retries before a backup Job is marked failed.
+	// Defaults to 3.
+	// +kubebuilder:default:=3
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	BackoffLimit *int32 `json:"backoffLimit,omitempty"`
+
 	// Server user credentials secret name (auto-populated by the operator in server mode).
 	// Contains username and password for authenticating to the Kopia Server.
 	// +optional

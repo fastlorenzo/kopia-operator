@@ -164,6 +164,31 @@ var _ = Describe("CronJob Builder", func() {
 			Expect(*cj.Spec.SuccessfulJobsHistoryLimit).To(Equal(int32(0)))
 			Expect(*cj.Spec.FailedJobsHistoryLimit).To(Equal(int32(0)))
 		})
+
+		It("should default the job ttl, deadline and backoff limit when unset", func() {
+			backup.Spec.TTLSecondsAfterFinished = nil
+			backup.Spec.ActiveDeadlineSeconds = nil
+			backup.Spec.BackoffLimit = nil
+			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			jobSpec := cj.Spec.JobTemplate.Spec
+			Expect(jobSpec.TTLSecondsAfterFinished).NotTo(BeNil())
+			Expect(*jobSpec.TTLSecondsAfterFinished).To(Equal(int32(86400)))
+			Expect(jobSpec.ActiveDeadlineSeconds).NotTo(BeNil())
+			Expect(*jobSpec.ActiveDeadlineSeconds).To(Equal(int64(21600)))
+			Expect(jobSpec.BackoffLimit).NotTo(BeNil())
+			Expect(*jobSpec.BackoffLimit).To(Equal(int32(3)))
+		})
+
+		It("should honor explicit job ttl, deadline and backoff limit from the spec", func() {
+			backup.Spec.TTLSecondsAfterFinished = ptr.To(int32(3600))
+			backup.Spec.ActiveDeadlineSeconds = ptr.To(int64(7200))
+			backup.Spec.BackoffLimit = ptr.To(int32(0))
+			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			jobSpec := cj.Spec.JobTemplate.Spec
+			Expect(*jobSpec.TTLSecondsAfterFinished).To(Equal(int32(3600)))
+			Expect(*jobSpec.ActiveDeadlineSeconds).To(Equal(int64(7200)))
+			Expect(*jobSpec.BackoffLimit).To(Equal(int32(0)))
+		})
 	})
 
 	Context("buildConfigMap", func() {

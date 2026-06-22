@@ -38,6 +38,17 @@ const (
 	// defaultFailedJobsHistoryLimit is the fallback retention for failed jobs
 	// when a KopiaBackup does not specify one (matches the Kubernetes default).
 	defaultFailedJobsHistoryLimit int32 = 1
+	// defaultTTLSecondsAfterFinished is the fallback time-to-live for finished
+	// backup Jobs (24h), so completed/failed Jobs are garbage-collected instead
+	// of accumulating.
+	defaultTTLSecondsAfterFinished int32 = 86400
+	// defaultActiveDeadlineSeconds is the fallback maximum runtime for a backup
+	// Job (6h). It bounds a stuck pod so it cannot block future runs under the
+	// Forbid concurrency policy.
+	defaultActiveDeadlineSeconds int64 = 21600
+	// defaultBackoffLimit is the fallback number of retries before a backup Job
+	// is marked failed.
+	defaultBackoffLimit int32 = 3
 )
 
 // buildBackupCommand builds the shell command to run in the backup container.
@@ -111,6 +122,18 @@ func buildCronJob(
 	failedJobsHistoryLimit := backup.Spec.FailedJobsHistoryLimit
 	if failedJobsHistoryLimit == nil {
 		failedJobsHistoryLimit = ptr.To(defaultFailedJobsHistoryLimit)
+	}
+	ttlSecondsAfterFinished := backup.Spec.TTLSecondsAfterFinished
+	if ttlSecondsAfterFinished == nil {
+		ttlSecondsAfterFinished = ptr.To(defaultTTLSecondsAfterFinished)
+	}
+	activeDeadlineSeconds := backup.Spec.ActiveDeadlineSeconds
+	if activeDeadlineSeconds == nil {
+		activeDeadlineSeconds = ptr.To(defaultActiveDeadlineSeconds)
+	}
+	backoffLimit := backup.Spec.BackoffLimit
+	if backoffLimit == nil {
+		backoffLimit = ptr.To(defaultBackoffLimit)
 	}
 
 	envVars := []corev1.EnvVar{
@@ -189,6 +212,9 @@ func buildCronJob(
 					},
 				},
 				Spec: batchv1.JobSpec{
+					TTLSecondsAfterFinished: ttlSecondsAfterFinished,
+					ActiveDeadlineSeconds:   activeDeadlineSeconds,
+					BackoffLimit:            backoffLimit,
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: map[string]string{
