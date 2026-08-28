@@ -278,16 +278,16 @@ func (r *KopiaBackupReconciler) reconcileBackupResources(
 	backup *backupv1alpha1.KopiaBackup,
 	repo *backupv1alpha1.KopiaRepository,
 ) (ctrl.Result, error) {
-	nodeName, appName, podName := r.findPodUsingPVC(ctx, backup)
+	placement := r.findPodUsingPVC(ctx, backup)
 
-	backup.Status.NodeName = nodeName
+	backup.Status.NodeName = placement.NodeName
 
 	cronJobName := naming.CronJobName(backup.Spec.PVCName)
 	backup.Status.CronJobName = cronJobName
 
 	// Always reconcile the CronJob so that schedule/config changes are applied
 	// even when the consumer pod is temporarily absent.
-	if err := r.reconcileCronJob(ctx, backup, cronJobName, nodeName, appName, repo); err != nil {
+	if err := r.reconcileCronJob(ctx, backup, cronJobName, placement, repo); err != nil {
 		r.setCondition(backup, backupv1alpha1.ConditionTypeCronJobCreated, metav1.ConditionFalse,
 			backupv1alpha1.ReasonCronJobFailed, err.Error())
 		r.Recorder.Event(backup, corev1.EventTypeWarning, "CronJobFailed", err.Error())
@@ -297,7 +297,7 @@ func (r *KopiaBackupReconciler) reconcileBackupResources(
 	r.setCondition(backup, backupv1alpha1.ConditionTypeCronJobCreated, metav1.ConditionTrue,
 		backupv1alpha1.ReasonReconciled, fmt.Sprintf("CronJob %q is up to date", cronJobName))
 
-	if nodeName == "" {
+	if placement.NodeName == "" {
 		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			backupv1alpha1.ReasonNoPodFound, "No running pod found with the PVC mounted")
 		// Requeue: no watch on all pods. Use the slow delay — workloads often stay
@@ -310,7 +310,8 @@ func (r *KopiaBackupReconciler) reconcileBackupResources(
 			backupv1alpha1.ReasonSuspended, "Backup is suspended")
 	} else {
 		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionTrue,
-			backupv1alpha1.ReasonReconciled, fmt.Sprintf("Backup active on node %s (pod %s)", nodeName, podName))
+			backupv1alpha1.ReasonReconciled,
+			fmt.Sprintf("Backup active on node %s (pod %s)", placement.NodeName, placement.PodName))
 	}
 
 	return ctrl.Result{}, nil
@@ -372,13 +373,15 @@ func (r *KopiaBackupReconciler) getKopiaRepository(ctx context.Context, name, na
 	}
 }
 
-func (r *KopiaBackupReconciler) findPodUsingPVC(ctx context.Context, kBackup *backupv1alpha1.KopiaBackup) (nodeName, appName, podName string) {
+// findPodUsingPVC returns the placement of the running Pod that mounts the
+// backup's PVC. The zero value is returned when no such Pod exists.
+func (r *KopiaBackupReconciler) findPodUsingPVC(ctx context.Context, kBackup *backupv1alpha1.KopiaBackup) podPlacement {
 	log := ctrllog.FromContext(ctx)
 
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList, client.InNamespace(kBackup.Namespace)); err != nil {
 		log.Error(err, "Failed to list Pods")
-		return "", "", ""
+		return podPlacement{}
 	}
 
 	for _, pod := range podList.Items {
@@ -390,11 +393,16 @@ func (r *KopiaBackupReconciler) findPodUsingPVC(ctx context.Context, kBackup *ba
 		}
 		for _, volume := range pod.Spec.Volumes {
 			if pvc := volume.PersistentVolumeClaim; pvc != nil && pvc.ClaimName == kBackup.Spec.PVCName {
-				return pod.Spec.NodeName, pod.Labels["app.kubernetes.io/name"], pod.Name
+				return podPlacement{
+					NodeName:    pod.Spec.NodeName,
+					AppName:     pod.Labels["app.kubernetes.io/name"],
+					PodName:     pod.Name,
+					Tolerations: pod.Spec.Tolerations,
+				}
 			}
 		}
 	}
-	return "", "", ""
+	return podPlacement{}
 }
 
 // reconcileConfigMap creates or updates the Kopia config ConfigMap (direct mode only).
@@ -429,10 +437,11 @@ func (r *KopiaBackupReconciler) reconcileConfigMap(ctx context.Context, backup *
 func (r *KopiaBackupReconciler) reconcileCronJob(
 	ctx context.Context,
 	backup *backupv1alpha1.KopiaBackup,
-	cronJobName, nodeName, appName string,
+	cronJobName string,
+	placement podPlacement,
 	repo *backupv1alpha1.KopiaRepository,
 ) error {
-	desired := buildCronJob(backup, cronJobName, nodeName, appName, repo, r.kopiaImage())
+	desired := buildCronJob(backup, cronJobName, placement, repo, r.kopiaImage())
 	if err := ctrl.SetControllerReference(backup, desired, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set owner reference on CronJob: %w", err)
 	}

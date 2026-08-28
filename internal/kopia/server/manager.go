@@ -46,7 +46,7 @@ const (
 	livenessInitialDelay  = 30
 	livenessPeriod        = 10
 	readinessInitialDelay = 10
-	readinessPeriod       = 5
+	readinessPeriod       = 10
 	probeTimeout          = 5
 	probeFailureThreshold = 3
 )
@@ -272,14 +272,18 @@ func (m *KopiaServerManager) constructServerDeployment(
 			TimeoutSeconds:      probeTimeout,
 			FailureThreshold:    probeFailureThreshold,
 		},
+		// Readiness deliberately probes the TCP port rather than running
+		// `kopia server status`. The server runs with a single replica, so a
+		// NotReady pod removes the only Service endpoint and every client's
+		// `repository connect server` fails the TLS handshake outright. The exec
+		// probe blocked whenever the server was merely BUSY (a snapshot wave
+		// saturating its CPU, or a full-maintenance cycle walking the backing
+		// store), turning transient slowness into hard backup failures. A port
+		// check still catches a dead or never-started server, which is what
+		// readiness is for here.
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
-				Exec: &corev1.ExecAction{
-					Command: []string{"/bin/sh", "-c",
-						`FINGERPRINT="${KOPIA_TLS_FINGERPRINT:-$(openssl x509 -in /tls/tls.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':')}" && ` +
-							fmt.Sprintf(`kopia server status --address=https://127.0.0.1:%d --server-username=admin --server-password="$KOPIA_SERVER_PASSWORD" --server-cert-fingerprint=$FINGERPRINT`, defaultServerPort),
-					},
-				},
+				TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(defaultServerPort)},
 			},
 			InitialDelaySeconds: readinessInitialDelay,
 			PeriodSeconds:       readinessPeriod,

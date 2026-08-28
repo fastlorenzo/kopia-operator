@@ -47,8 +47,14 @@ const (
 	// Forbid concurrency policy.
 	defaultActiveDeadlineSeconds int64 = 21600
 	// defaultBackoffLimit is the fallback number of retries before a backup Job
-	// is marked failed.
-	defaultBackoffLimit int32 = 3
+	// is marked failed. The connect step retries internally (see
+	// buildBackupCommand), so these retries cover the snapshot itself.
+	defaultBackoffLimit int32 = 5
+
+	// connectRetryAttempts / connectRetryDelaySeconds bound how long a backup Job
+	// waits for the Kopia server to become reachable before giving up (6 min).
+	connectRetryAttempts     = 12
+	connectRetryDelaySeconds = 30
 )
 
 // buildBackupCommand builds the shell command to run in the backup container.
@@ -63,11 +69,25 @@ func buildBackupCommand(_ *backupv1alpha1.KopiaBackup, repo *backupv1alpha1.Kopi
 
 		return fmt.Sprintf(`set -e
 echo "[1/4] Connecting to Kopia Server..."
-kopia repository connect server \
+# The server runs a single replica: while it is unready (restart, or a
+# readiness blip under load) its Service has no endpoint and the connect fails
+# the TLS handshake with "authentication handshake failed: EOF". Retry here
+# rather than burning the Job's backoffLimit on a server that is coming back.
+connect_attempts=%d
+attempt=1
+until kopia repository connect server \
   --url=%s \
   --server-cert-fingerprint="${KOPIA_TLS_FINGERPRINT}" \
   --override-username="${KOPIA_SERVER_USERNAME%%%%@*}" \
-  --override-hostname="${KOPIA_SERVER_USERNAME#*@}"
+  --override-hostname="${KOPIA_SERVER_USERNAME#*@}"; do
+  if [ "${attempt}" -ge "${connect_attempts}" ]; then
+    echo "[ERROR] Could not connect to the Kopia Server after ${connect_attempts} attempts"
+    exit 1
+  fi
+  echo "[WARN] Connect attempt ${attempt}/${connect_attempts} failed; retrying in %ds..."
+  attempt=$((attempt + 1))
+  sleep %d
+done
 
 echo "[2/4] Creating snapshot..."
 kopia snapshot create %s || { echo "[WARN] Snapshot completed with errors (see above), continuing..."; }
@@ -78,7 +98,8 @@ kopia snapshot list %s
 echo "[4/4] Disconnecting repository..."
 mkdir -p "${KOPIA_LOG_DIR}/cli-logs"
 kopia repository disconnect 2>/dev/null || true
-`, serverURL, mountPath, mountPath)
+`, connectRetryAttempts, serverURL, connectRetryDelaySeconds, connectRetryDelaySeconds,
+			mountPath, mountPath)
 	}
 
 	return fmt.Sprintf(`set -e
@@ -96,20 +117,52 @@ kopia maintenance info
 `, mountPath, mountPath)
 }
 
+// podPlacement carries the scheduling attributes of the workload Pod that
+// mounts the PVC. The snapshot Job has to land on that same node to mount a
+// ReadWriteOnce volume, so it must also be able to tolerate whatever taints the
+// node carries. The zero value means no such Pod was found.
+type podPlacement struct {
+	NodeName    string
+	AppName     string
+	PodName     string
+	Tolerations []corev1.Toleration
+}
+
+// defaultTolerations is used when no consumer Pod was found, so a CronJob
+// created ahead of its workload keeps the historical behaviour.
+func defaultTolerations() []corev1.Toleration {
+	return []corev1.Toleration{
+		{
+			Effect:   corev1.TaintEffectNoSchedule,
+			Key:      "dedicated",
+			Operator: corev1.TolerationOpExists,
+		},
+	}
+}
+
 // buildCronJob constructs a CronJob for the backup.
 func buildCronJob(
 	backup *backupv1alpha1.KopiaBackup,
 	cronJobName string,
-	nodeName string,
-	appName string,
+	placement podPlacement,
 	repo *backupv1alpha1.KopiaRepository,
 	kopiaImage string,
 ) *batchv1.CronJob {
+	nodeName, appName := placement.NodeName, placement.AppName
+
 	var mountPath string
 	if appName != "" {
 		mountPath = "/data/" + backup.Namespace + "/" + appName + "/" + backup.Spec.PVCName
 	} else {
 		mountPath = "/data/" + backup.Namespace + "/" + backup.Spec.PVCName
+	}
+
+	// Copy the consumer Pod's tolerations: the Job is pinned to that Pod's node
+	// by node affinity, so without them it stays Pending forever on a tainted
+	// node (e.g. a dedicated monitoring worker).
+	tolerations := placement.Tolerations
+	if len(tolerations) == 0 {
+		tolerations = defaultTolerations()
 	}
 
 	kopiaCacheDirectory := repo.Spec.Caching.CacheDirectory
@@ -247,13 +300,7 @@ func buildCronJob(
 							},
 							Volumes:       volumes,
 							RestartPolicy: corev1.RestartPolicyOnFailure,
-							Tolerations: []corev1.Toleration{
-								{
-									Effect:   corev1.TaintEffectNoSchedule,
-									Key:      "dedicated",
-									Operator: corev1.TolerationOpExists,
-								},
-							},
+							Tolerations:   tolerations,
 						},
 					},
 					Suspend: &backup.Spec.Suspend,
