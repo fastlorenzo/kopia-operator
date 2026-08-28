@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -82,7 +83,7 @@ var _ = Describe("CronJob Builder", func() {
 
 	Context("buildCronJob", func() {
 		It("should create a valid CronJob for filesystem storage", func() {
-			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "kopia/kopia:latest")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "node-a", AppName: "my-app"}, repo, "kopia/kopia:latest")
 			Expect(cj.Name).To(Equal("snapshot-my-pvc"))
 			Expect(cj.Namespace).To(Equal("default"))
 			Expect(cj.Spec.Schedule).To(Equal("0 3 * * *"))
@@ -101,26 +102,59 @@ var _ = Describe("CronJob Builder", func() {
 		})
 
 		It("should set the image when kopiaImage is provided", func() {
-			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "custom/kopia:v1")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "node-a", AppName: "my-app"}, repo, "custom/kopia:v1")
 			containers := cj.Spec.JobTemplate.Spec.Template.Spec.Containers
 			Expect(containers[0].Image).To(Equal("custom/kopia:v1"))
 		})
 
 		It("should set suspend to true when backup is suspended", func() {
 			backup.Spec.Suspend = true
-			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "node-a", AppName: "my-app"}, repo, "")
 			Expect(*cj.Spec.Suspend).To(BeTrue())
 		})
 
+		It("should copy the consumer pod's tolerations", func() {
+			placement := podPlacement{
+				NodeName: "worker-04",
+				AppName:  "my-app",
+				Tolerations: []corev1.Toleration{
+					{Key: "monitoring", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
+					{Key: "node.kubernetes.io/not-ready", Operator: corev1.TolerationOpExists},
+				},
+			}
+			cj := buildCronJob(backup, "snapshot-my-pvc", placement, repo, "")
+			tolerations := cj.Spec.JobTemplate.Spec.Template.Spec.Tolerations
+			Expect(tolerations).To(HaveLen(2))
+			Expect(tolerations[0].Key).To(Equal("monitoring"))
+			Expect(tolerations[1].Key).To(Equal("node.kubernetes.io/not-ready"))
+		})
+
+		It("should fall back to the dedicated toleration when no pod was found", func() {
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{}, repo, "")
+			tolerations := cj.Spec.JobTemplate.Spec.Template.Spec.Tolerations
+			Expect(tolerations).To(HaveLen(1))
+			Expect(tolerations[0].Key).To(Equal("dedicated"))
+		})
+
+		It("should retry the server connect instead of failing on the first EOF", func() {
+			repo.Spec.Server.Enabled = true
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "node-a", AppName: "my-app"}, repo, "")
+			script := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args[2]
+			Expect(script).To(ContainSubstring("until kopia repository connect server"))
+			Expect(script).To(ContainSubstring("connect_attempts=12"))
+			Expect(script).To(ContainSubstring("sleep 30"))
+			Expect(*cj.Spec.JobTemplate.Spec.BackoffLimit).To(Equal(int32(5)))
+		})
+
 		It("should include node affinity for the correct node", func() {
-			cj := buildCronJob(backup, "snapshot-my-pvc", "worker-node-1", "my-app", repo, "")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "worker-node-1", AppName: "my-app"}, repo, "")
 			affinity := cj.Spec.JobTemplate.Spec.Template.Spec.Affinity
 			Expect(affinity).NotTo(BeNil())
 			Expect(affinity.NodeAffinity).NotTo(BeNil())
 		})
 
 		It("should use pvc-only mount path when appName is empty", func() {
-			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "", repo, "kopia/kopia:latest")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "node-a"}, repo, "kopia/kopia:latest")
 			container := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
 			// With empty appName, mount path should be /data/<namespace>/<pvc> (no app segment)
 			Expect(container.Args[2]).To(ContainSubstring("/data/default/my-pvc"))
@@ -128,21 +162,21 @@ var _ = Describe("CronJob Builder", func() {
 		})
 
 		It("should set empty app label when appName is empty", func() {
-			cj := buildCronJob(backup, "snapshot-my-pvc", "", "", repo, "")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{}, repo, "")
 			labels := cj.Spec.JobTemplate.Spec.Template.ObjectMeta.Labels
 			Expect(labels["app.kubernetes.io/name"]).To(Equal(""))
 			Expect(labels["backup.cloudinfra.be/node-name"]).To(Equal(""))
 		})
 
 		It("should omit node affinity with empty nodeName", func() {
-			cj := buildCronJob(backup, "snapshot-my-pvc", "", "my-app", repo, "")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{AppName: "my-app"}, repo, "")
 			Expect(cj.Spec.JobTemplate.Spec.Template.Spec.Affinity).To(BeNil())
 		})
 
 		It("should default jobs history limits to 3 successful / 1 failed when unset", func() {
 			backup.Spec.SuccessfulJobsHistoryLimit = nil
 			backup.Spec.FailedJobsHistoryLimit = nil
-			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "node-a", AppName: "my-app"}, repo, "")
 			Expect(cj.Spec.SuccessfulJobsHistoryLimit).NotTo(BeNil())
 			Expect(*cj.Spec.SuccessfulJobsHistoryLimit).To(Equal(int32(3)))
 			Expect(cj.Spec.FailedJobsHistoryLimit).NotTo(BeNil())
@@ -152,7 +186,7 @@ var _ = Describe("CronJob Builder", func() {
 		It("should honor explicit jobs history limits from the spec", func() {
 			backup.Spec.SuccessfulJobsHistoryLimit = ptr.To(int32(7))
 			backup.Spec.FailedJobsHistoryLimit = ptr.To(int32(5))
-			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "node-a", AppName: "my-app"}, repo, "")
 			Expect(*cj.Spec.SuccessfulJobsHistoryLimit).To(Equal(int32(7)))
 			Expect(*cj.Spec.FailedJobsHistoryLimit).To(Equal(int32(5)))
 		})
@@ -160,7 +194,7 @@ var _ = Describe("CronJob Builder", func() {
 		It("should honor an explicit zero jobs history limit", func() {
 			backup.Spec.SuccessfulJobsHistoryLimit = ptr.To(int32(0))
 			backup.Spec.FailedJobsHistoryLimit = ptr.To(int32(0))
-			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "node-a", AppName: "my-app"}, repo, "")
 			Expect(*cj.Spec.SuccessfulJobsHistoryLimit).To(Equal(int32(0)))
 			Expect(*cj.Spec.FailedJobsHistoryLimit).To(Equal(int32(0)))
 		})
@@ -169,21 +203,21 @@ var _ = Describe("CronJob Builder", func() {
 			backup.Spec.TTLSecondsAfterFinished = nil
 			backup.Spec.ActiveDeadlineSeconds = nil
 			backup.Spec.BackoffLimit = nil
-			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "node-a", AppName: "my-app"}, repo, "")
 			jobSpec := cj.Spec.JobTemplate.Spec
 			Expect(jobSpec.TTLSecondsAfterFinished).NotTo(BeNil())
 			Expect(*jobSpec.TTLSecondsAfterFinished).To(Equal(int32(86400)))
 			Expect(jobSpec.ActiveDeadlineSeconds).NotTo(BeNil())
 			Expect(*jobSpec.ActiveDeadlineSeconds).To(Equal(int64(21600)))
 			Expect(jobSpec.BackoffLimit).NotTo(BeNil())
-			Expect(*jobSpec.BackoffLimit).To(Equal(int32(3)))
+			Expect(*jobSpec.BackoffLimit).To(Equal(int32(5)))
 		})
 
 		It("should honor explicit job ttl, deadline and backoff limit from the spec", func() {
 			backup.Spec.TTLSecondsAfterFinished = ptr.To(int32(3600))
 			backup.Spec.ActiveDeadlineSeconds = ptr.To(int64(7200))
 			backup.Spec.BackoffLimit = ptr.To(int32(0))
-			cj := buildCronJob(backup, "snapshot-my-pvc", "node-a", "my-app", repo, "")
+			cj := buildCronJob(backup, "snapshot-my-pvc", podPlacement{NodeName: "node-a", AppName: "my-app"}, repo, "")
 			jobSpec := cj.Spec.JobTemplate.Spec
 			Expect(*jobSpec.TTLSecondsAfterFinished).To(Equal(int32(3600)))
 			Expect(*jobSpec.ActiveDeadlineSeconds).To(Equal(int64(7200)))
