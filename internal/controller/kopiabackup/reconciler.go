@@ -51,6 +51,10 @@ import (
 const (
 	finalizerName = "backup.cloudinfra.be/finalizer"
 	requeueDelay  = 30 * time.Second
+	// noPodRequeueDelay is used when no pod currently mounts the PVC. This is
+	// usually a long-lived state (scaled-down or removed workload), and each
+	// reconcile round-trips to the Kopia server, so poll slowly.
+	noPodRequeueDelay = 10 * time.Minute
 
 	// pvcNameField is the field indexer for PVC name in KopiaBackup spec.
 	pvcNameField = ".spec.pvcName"
@@ -296,8 +300,9 @@ func (r *KopiaBackupReconciler) reconcileBackupResources(
 	if nodeName == "" {
 		r.setCondition(backup, backupv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			backupv1alpha1.ReasonNoPodFound, "No running pod found with the PVC mounted")
-		// Requeue: no watch on all pods; this is a genuinely transient condition.
-		return ctrl.Result{RequeueAfter: requeueDelay}, nil
+		// Requeue: no watch on all pods. Use the slow delay — workloads often stay
+		// scaled down for a long time and the CronJob keeps running regardless.
+		return ctrl.Result{RequeueAfter: noPodRequeueDelay}, nil
 	}
 
 	if backup.Spec.Suspend {

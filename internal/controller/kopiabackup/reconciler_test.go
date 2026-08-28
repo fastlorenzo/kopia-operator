@@ -166,10 +166,12 @@ var _ = Describe("KopiaBackup Controller", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
+			// Missing pods are usually a long-lived state; poll slowly.
+			Expect(result.RequeueAfter).To(Equal(noPodRequeueDelay))
 
 			var backup backupv1alpha1.KopiaBackup
 			Expect(k8sClient.Get(ctx, typeNamespacedName, &backup)).To(Succeed())

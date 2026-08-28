@@ -207,14 +207,35 @@ var _ = Describe("EnsureUser", func() {
 		Expect(capturedCmd).NotTo(BeEmpty())
 	})
 
-	It("reuses existing secret and still calls the server", func() {
+	It("marks the secret as synced after creating the user", func() {
 		mgr := newTestManager(successExecutor)
+
+		backup := testBackup(ns, "b1b", "fresh-pvc")
+		repo := testRepo(ns)
+		createServerPod(ctx, ns)
+
+		secretName, err := mgr.EnsureUser(ctx, backup, repo)
+		Expect(err).NotTo(HaveOccurred())
+
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, secret)).To(Succeed())
+		expected := credentialsFingerprint(string(secret.Data["KOPIA_SERVER_USERNAME"]), string(secret.Data["KOPIA_SERVER_PASSWORD"]))
+		Expect(secret.Annotations).To(HaveKeyWithValue(UserSyncedAnnotation, expected))
+	})
+
+	It("reuses an existing unsynced secret, calls the server once, then skips subsequent calls", func() {
+		calls := 0
+		executor := func(_ context.Context, _, _, _ string, _ []string) (string, string, error) {
+			calls++
+			return "ok", "", nil
+		}
+		mgr := newTestManager(executor)
 
 		backup := testBackup(ns, "b2", "existing-pvc")
 		repo := testRepo(ns)
 		createServerPod(ctx, ns)
 
-		// Pre-create secret
+		// Pre-create secret without the synced annotation (e.g. created by an older operator)
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      naming.UserSecretName(ns, "existing-pvc"),
@@ -230,6 +251,80 @@ var _ = Describe("EnsureUser", func() {
 		secretName, err := mgr.EnsureUser(ctx, backup, repo)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(secretName).To(Equal(naming.UserSecretName(ns, "existing-pvc")))
+		Expect(calls).To(Equal(1))
+
+		// The secret is now annotated with the credentials fingerprint
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, secret)).To(Succeed())
+		Expect(secret.Annotations).To(HaveKeyWithValue(UserSyncedAnnotation,
+			credentialsFingerprint("preexisting-user", "preexisting-pass")))
+
+		// Subsequent reconciles must not exec into the server again
+		_, err = mgr.EnsureUser(ctx, backup, repo)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = mgr.EnsureUser(ctx, backup, repo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(calls).To(Equal(1))
+	})
+
+	It("re-syncs when the secret password changed since the last sync", func() {
+		calls := 0
+		mgr := newTestManager(func(_ context.Context, _, _, _ string, _ []string) (string, string, error) {
+			calls++
+			return "ok", "", nil
+		})
+
+		backup := testBackup(ns, "b2b", "rotated-pvc")
+		repo := testRepo(ns)
+		createServerPod(ctx, ns)
+
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      naming.UserSecretName(ns, "rotated-pvc"),
+				Namespace: ns,
+				Annotations: map[string]string{
+					UserSyncedAnnotation: credentialsFingerprint("rotated-user", "old-pass"),
+				},
+			},
+			StringData: map[string]string{
+				"KOPIA_SERVER_USERNAME": "rotated-user",
+				"KOPIA_SERVER_PASSWORD": "new-pass",
+			},
+		}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+
+		_, err := mgr.EnsureUser(ctx, backup, repo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(calls).To(Equal(1))
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secret.Name, Namespace: ns}, secret)).To(Succeed())
+		Expect(secret.Annotations).To(HaveKeyWithValue(UserSyncedAnnotation,
+			credentialsFingerprint("rotated-user", "new-pass")))
+	})
+
+	It("does not mark the secret synced when the server call fails", func() {
+		mgr := newTestManager(failExecutor(errors.New("boom")))
+
+		backup := testBackup(ns, "b2c", "failing-pvc")
+		repo := testRepo(ns)
+		createServerPod(ctx, ns)
+
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      naming.UserSecretName(ns, "failing-pvc"),
+				Namespace: ns,
+			},
+			StringData: map[string]string{
+				"KOPIA_SERVER_USERNAME": "u",
+				"KOPIA_SERVER_PASSWORD": "p",
+			},
+		}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+
+		_, err := mgr.EnsureUser(ctx, backup, repo)
+		Expect(err).To(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secret.Name, Namespace: ns}, secret)).To(Succeed())
+		Expect(secret.Annotations).NotTo(HaveKey(UserSyncedAnnotation))
 	})
 
 	It("returns ServerNotReadyError when no server pod exists", func() {
