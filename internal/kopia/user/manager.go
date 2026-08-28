@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,6 +33,17 @@ import (
 const (
 	// execTimeout is the maximum duration for a pod exec command.
 	execTimeout = 30 * time.Second
+
+	// UserSyncedAnnotation is set on the user credentials secret once the
+	// credentials it holds have been applied to the Kopia server. Its value is a
+	// fingerprint of the credentials, so a changed password triggers a re-sync
+	// while an unchanged secret lets reconciliation skip the exec entirely.
+	//
+	// Every `kopia server user set` writes a new user manifest (and therefore a
+	// new index blob) to the repository, so re-applying unchanged credentials on
+	// each reconcile bloats the repository index. Delete the annotation to force
+	// a re-sync (e.g. after re-creating the repository).
+	UserSyncedAnnotation = "backup.cloudinfra.be/user-synced"
 )
 
 // PodExecutor is a function type for executing commands in pods.
@@ -129,6 +142,7 @@ func (m *KopiaUserManager) EnsureUser(
 			return "", fmt.Errorf("failed to create user on Kopia server: %w", err)
 		}
 
+		m.markUserSynced(ctx, secret, username, password)
 		return secretName, nil
 	}
 
@@ -142,6 +156,12 @@ func (m *KopiaUserManager) EnsureUser(
 		return "", fmt.Errorf("secret %q missing required key KOPIA_SERVER_PASSWORD", secretName)
 	}
 
+	fingerprint := credentialsFingerprint(string(existingUsername), string(existingPassword))
+	if secret.Annotations[UserSyncedAnnotation] == fingerprint {
+		logger.V(1).Info("User credentials already synced to server, skipping", "secret", secretName)
+		return secretName, nil
+	}
+
 	if err := m.createUserOnServer(ctx, repo, string(existingUsername), string(existingPassword)); err != nil {
 		var serverNotReady *kopia.ServerNotReadyError
 		if errors.As(err, &serverNotReady) {
@@ -151,7 +171,34 @@ func (m *KopiaUserManager) EnsureUser(
 		return "", fmt.Errorf("failed to ensure user on Kopia server: %w", err)
 	}
 
+	m.markUserSynced(ctx, secret, string(existingUsername), string(existingPassword))
 	return secretName, nil
+}
+
+// credentialsFingerprint returns a short, non-reversible fingerprint of the
+// credentials, suitable for storing in an annotation.
+func credentialsFingerprint(username, password string) string {
+	sum := sha256.Sum256([]byte(username + "\x00" + password))
+	return hex.EncodeToString(sum[:16])
+}
+
+// markUserSynced records on the secret that its credentials have been applied
+// to the server. Failure is logged but not returned: the worst case is one
+// redundant `user set` on the next reconcile.
+func (m *KopiaUserManager) markUserSynced(ctx context.Context, secret *corev1.Secret, username, password string) {
+	logger := log.FromContext(ctx)
+	fingerprint := credentialsFingerprint(username, password)
+	if secret.Annotations[UserSyncedAnnotation] == fingerprint {
+		return
+	}
+	patch := client.MergeFrom(secret.DeepCopy())
+	if secret.Annotations == nil {
+		secret.Annotations = map[string]string{}
+	}
+	secret.Annotations[UserSyncedAnnotation] = fingerprint
+	if err := m.Client.Patch(ctx, secret, patch); err != nil {
+		logger.Error(err, "Failed to mark user credentials secret as synced", "secret", secret.Name)
+	}
 }
 
 // DeleteUser deletes a user from the Kopia Server.
